@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Generated build and tool output
+.next/
+.vinext/
+dist/
+.wrangler/
+.vercel/
+outputs/
+work/
+*.tsbuildinfo
+next-env.d.ts
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Temporary files and logs
+tmp/
+output/
+*.log
+
+# Previous nested workspace kept only as a local backup
+/web/
+
+# Supabase CLI local state
+supabase/.temp/
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

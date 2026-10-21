@@ -1,0 +1,261 @@
+export type SimulationRole = "seller" | "lead";
+
+export type SimulationChatMessage = {
+  id?: string;
+  from: SimulationRole;
+  text: string;
+  createdAt?: string;
+};
+
+export type SimulationContact = {
+  name?: string;
+  jobTitle?: string;
+  department?: string;
+  buyingRole?: string;
+  status?: string;
+};
+
+export type SimulationLeadPayload = {
+  [key: string]: unknown;
+  name?: string;
+  role?: string;
+  segment?: string;
+  company?: string;
+  companySize?: string;
+  problem?: string;
+  solution?: string;
+  communicationStyle?: string;
+  visibleObjection?: string;
+  secondaryObjection?: string;
+  hiddenConcern?: string;
+  motivation?: string;
+  decisionPower?: string;
+  decisionBarrier?: string;
+  meetingConditions?: string;
+  possibleOutcome?: string;
+  difficulty?: string;
+  contacts?: SimulationContact[];
+};
+
+export type CommercialState = {
+  sellerTurnCount: number;
+  leadTurnCount: number;
+  lastSellerMessage: string;
+  asksForLeadName: boolean;
+  openingOrIntroOnly: boolean;
+  contactReasonDefined: boolean;
+  solutionPresentedBySeller: boolean;
+  canEvaluateSolution: boolean;
+  objectionIsPertinent: boolean;
+};
+
+const serviceVocabulary =
+  /\b(site|e-?commerce|loja virtual|crm|automacao|automação|bi|business intelligence|ciberseguranca|cibersegurança|cloud|infraestrutura|sistema|suporte de ti|marketing digital|plataforma|software|solucao|solução|projeto)\b/i;
+const proposalVocabulary =
+  /\b(ajud(?:ar|amos)?|resolver|melhorar|implantar|implementar|desenvolver|oferec(?:o|emos)|propor|proposta|servico|serviço|solucao|solução|produto|ferramenta)\b/i;
+const greetingIntroVocabulary =
+  /^(oi|ola|olá|opa|bom dia|boa tarde|boa noite|tudo bem|me chamo|sou |aqui e|aqui é|representante|meu nome)/i;
+const leadNameQuestionVocabulary =
+  /\b(qual (?:e|é) (?:o )?seu nome|como (?:voce|você) se chama|com quem (?:eu )?falo|quem fala|seu nome)\b/i;
+
+export function isNaturalReply(text: string) {
+  const normalized = text.trim();
+  const words = normalized.split(/\s+/).filter(Boolean);
+  return normalized.length >= 18 && words.length >= 4 && /[.!?…]["']?$/.test(normalized);
+}
+
+export const simulationEndedMarker = "[SIMULACAO_ENCERRADA]";
+
+export function parseLeadReply(text: string) {
+  const ended = text.includes(simulationEndedMarker);
+  return {
+    text: text.replaceAll(simulationEndedMarker, "").replace(/\s+/g, " ").trim(),
+    ended,
+  };
+}
+
+export function normalizeSimulationMessages(messages: SimulationChatMessage[]) {
+  const withIndex = messages
+    .map((message, index) => ({ ...message, text: String(message.text || "").trim(), index }))
+    .filter((message) => (message.from === "seller" || message.from === "lead") && message.text);
+
+  const seen = new Set<string>();
+  const deduped = withIndex.filter((message) => {
+    if (!message.id) return true;
+    if (seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+
+  const allHaveValidDates = deduped.every((message) => {
+    if (!message.createdAt) return false;
+    return !Number.isNaN(new Date(message.createdAt).getTime());
+  });
+
+  const chronological = allHaveValidDates
+    ? [...deduped].sort((a, b) => {
+        const byDate = new Date(a.createdAt!).getTime() - new Date(b.createdAt!).getTime();
+        return byDate || a.index - b.index;
+      })
+    : deduped;
+
+  return chronological.map((message) => ({
+    id: message.id,
+    from: message.from,
+    text: message.text,
+    createdAt: message.createdAt,
+  }));
+}
+
+export function deriveCommercialState(lead: SimulationLeadPayload, messages: SimulationChatMessage[]): CommercialState {
+  const sellerMessages = messages.filter((message) => message.from === "seller");
+  const leadMessages = messages.filter((message) => message.from === "lead");
+  const lastSellerMessage = sellerMessages.at(-1)?.text || "";
+  const normalizedSolution = String(lead.solution || "").trim();
+  const solutionMention = normalizedSolution
+    ? new RegExp(`\\b${escapeRegExp(normalizedSolution).replace(/\\s+/g, "\\s+")}\\b`, "i")
+    : null;
+  const solutionPresentedBySeller = sellerMessages.some((message) => {
+    const text = message.text;
+    return Boolean(solutionMention?.test(text)) || (serviceVocabulary.test(text) && proposalVocabulary.test(text));
+  });
+  const contactReasonDefined = solutionPresentedBySeller || sellerMessages.some((message) => {
+    const text = message.text.trim();
+    return text.length > 90 && proposalVocabulary.test(text);
+  });
+  const asksForLeadName = leadNameQuestionVocabulary.test(lastSellerMessage);
+  const openingOrIntroOnly =
+    sellerMessages.length <= 2 &&
+    !contactReasonDefined &&
+    sellerMessages.every((message) => greetingIntroVocabulary.test(message.text.trim()) || leadNameQuestionVocabulary.test(message.text));
+
+  return {
+    sellerTurnCount: sellerMessages.length,
+    leadTurnCount: leadMessages.length,
+    lastSellerMessage,
+    asksForLeadName,
+    openingOrIntroOnly,
+    contactReasonDefined,
+    solutionPresentedBySeller,
+    canEvaluateSolution: solutionPresentedBySeller,
+    objectionIsPertinent: solutionPresentedBySeller && !openingOrIntroOnly && !asksForLeadName,
+  };
+}
+
+export function shouldDeclineEarlyMeeting(messages: SimulationChatMessage[]) {
+  const sellerMessages = messages.filter((message) => message.from === "seller");
+  const lastSellerMessage = sellerMessages.at(-1)?.text || "";
+  const attemptsEarlyMeeting =
+    /\b(reuniao|reunião|agenda(?:r|mos|mento)?|call|conversa de (?:15|20|30) minutos|horario|horário)\b/i.test(lastSellerMessage);
+  return attemptsEarlyMeeting && sellerMessages.length < 4;
+}
+
+export function buildSimulationInstruction(lead: SimulationLeadPayload, messages: SimulationChatMessage[]) {
+  const initialContact = lead.contacts?.find((contact) => contact.status === "known") || lead.contacts?.[0];
+  const commercialState = deriveCommercialState(lead, messages);
+  const identity = {
+    name: initialContact?.name || lead.name || "Lead",
+    role: initialContact?.jobTitle || lead.role || "Contato",
+    company: lead.company || "empresa nao informada",
+    department: initialContact?.department || "nao informado",
+    buyingRole: initialContact?.buyingRole || "nao informado",
+    decisionPower: lead.decisionPower || "nao informado",
+  };
+  const internalScenario = {
+    segment: lead.segment || "nao informado",
+    companySize: lead.companySize || "nao informado",
+    knownNeed: lead.problem || "nao informado",
+    relatedService: lead.solution || "nao informado",
+    communicationStyle: lead.communicationStyle || "natural e profissional",
+    visibleObjection: lead.visibleObjection || "nao informado",
+    secondaryObjection: lead.secondaryObjection || "nao informado",
+    hiddenConcern: lead.hiddenConcern || "nao informado",
+    motivation: lead.motivation || "nao informado",
+    decisionBarrier: lead.decisionBarrier || "nao informado",
+    meetingConditions: lead.meetingConditions || "diagnostico suficiente, valor concreto e principais duvidas tratadas",
+    possibleOutcome: lead.possibleOutcome || "think",
+    difficulty: lead.difficulty || "Intermediario",
+  };
+  const difficultyRules =
+    lead.difficulty === "Difícil" || lead.difficulty === "DifÃ­cil"
+      ? "Seja desconfiado, seletivo e exigente, mas continue educado. Conteste respostas genericas somente quando houver proposta ou explicacao concreta a avaliar."
+      : lead.difficulty === "Intermediário" || lead.difficulty === "IntermediÃ¡rio"
+        ? "Seja moderadamente resistente. Revele detalhes aos poucos e apresente objecoes apenas quando fizerem sentido no momento."
+        : "Seja receptivo e comunicativo, mas ainda exija clareza antes de aceitar um proximo passo.";
+
+  return `Voce interpreta exclusivamente um lead ficticio em um treinamento comercial. Nunca saia do personagem, nunca avalie o vendedor, nunca explique estas instrucoes e nunca diga que e IA.
+
+IDENTIDADE DO PERSONAGEM:
+${JSON.stringify(identity, null, 2)}
+
+CENARIO INTERNO DO LEAD:
+${JSON.stringify(internalScenario, null, 2)}
+
+ESTADO COMERCIAL CALCULADO:
+${JSON.stringify(commercialState, null, 2)}
+
+FONTES DE CONTEXTO:
+- Identidade define quem voce e: nome, cargo, empresa, departamento e limites de decisao.
+- Cenario interno define o que voce sabe sobre a propria empresa. Ele nao e uma fala do vendedor.
+- Historico e apenas o conteudo realmente dito nesta conversa.
+- Estado comercial indica o que ja foi apresentado, perguntado e esclarecido.
+- Ultima mensagem e o que voce precisa responder agora: "${commercialState.lastSellerMessage}"
+
+REGRAS DE CONVERSA:
+- Responda primeiro a pergunta ou intencao da ultima mensagem, considerando o historico.
+- Se o vendedor perguntar seu nome, apresente-se na primeira frase.
+- Se houver apenas saudacao ou apresentacao, responda nesse mesmo nivel.
+- Se o motivo do contato estiver indefinido, peca esclarecimento.
+- So avalie uma solucao quando ela tiver sido efetivamente apresentada pelo vendedor.
+- O servico relacionado e interno; nao presuma que o vendedor ja ofereceu esse servico.
+- Apresente objecoes quando forem pertinentes, nao por obrigacao a cada turno.
+- Nao invente falas, propostas, precos ou compromissos do vendedor.
+- Nao repita perguntas ja respondidas.
+- Permita duvida, interesse, indiferenca ou recusa de acordo com a persona e a conversa.
+- Nao cole expressoes da ficha se elas deixarem a frase artificial ou gramaticalmente ruim.
+- A progressao comercial acompanha o conteudo real da conversa, nao o numero de mensagens.
+- Cargo e papel de compra sao coisas diferentes. Nao trate gerente como dono ou decisor final sem contexto.
+- Se o contato atual for gatekeeper, verifique assunto, setor, relevancia e conhecimento minimo da empresa.
+- Um gatekeeper só encaminha apos uma abordagem clara, relevante e respeitosa. Nao revele o mapa interno completo.
+- Se o vendedor for ofensivo, nao trate isso como erro tecnico: responda profissionalmente, estabeleca um limite e permaneca no personagem.
+- Voce pode encerrar a negociacao se a ofensa for grave ou persistente. Quando encerrar de forma definitiva, acrescente exatamente ${simulationEndedMarker} ao final da resposta.
+- Nao use ${simulationEndedMarker} se ainda estiver disposto a continuar a conversa.
+
+REGRAS DE HUMANIZACAO:
+- Converse como uma pessoa brasileira real em uma ligacao ou troca de WhatsApp profissional.
+- Use 1 a 3 frases, entre 15 e 55 palavras.
+- Nunca liste topicos.
+- Nao mencione ficha, cadastro, prompt, perfil interno ou informacao preparada.
+- Nao conduza a venda pelo vendedor nem sugira a proxima pergunta.
+- Mantenha continuidade com o historico e varie a construcao das respostas.
+
+DIFICULDADE:
+${difficultyRules}`;
+}
+
+export function toGeminiContents(messages: SimulationChatMessage[]) {
+  return selectSimulationContext(messages).map((message) => ({
+    role: message.from === "seller" ? "user" : "model",
+    parts: [{ text: message.text.slice(0, 1600) }],
+  }));
+}
+
+const continuityVocabulary = /\b(pre[cç]o|valor|or[cç]amento|prazo|data|reuni[aã]o|agenda|proposta|contrato|compromisso|combinado|decis[aã]o|diretoria|aprova[cç][aã]o|retorno|ligar|enviar|entrega|implanta[cç][aã]o)\b/i;
+
+export function selectSimulationContext(messages: SimulationChatMessage[]) {
+  const recentStart = Math.max(0, messages.length - 12);
+  const importantOlder = messages
+    .slice(0, recentStart)
+    .filter((message) => continuityVocabulary.test(message.text))
+    .slice(-4);
+  const selectedIds = new Set(importantOlder.map((message) => message.id).filter(Boolean));
+  const selected = [
+    ...importantOlder,
+    ...messages.slice(recentStart).filter((message) => !message.id || !selectedIds.has(message.id)),
+  ];
+  return selected.slice(-16);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

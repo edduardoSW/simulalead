@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Guia de Estudo - Codigo do Chatbot</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f8fb;
+      --paper: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --accent: #2457c5;
+      --accent-soft: #e9f0ff;
+      --code-bg: #111827;
+      --code-ink: #e5e7eb;
+      --warn-bg: #fff7e6;
+      --warn-line: #f2c66d;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.6;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 28px 22px;
+      border-right: 1px solid var(--line);
+      background: #eef3fa;
+      overflow: auto;
+    }
+
+    nav h1 {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+      line-height: 1.25;
+    }
+
+    nav p {
+      margin: 0 0 22px;
+      color: var(--muted);
+      font-size: .9rem;
+    }
+
+    nav a {
+      display: block;
+      padding: 8px 10px;
+      margin: 3px 0;
+      border-radius: 8px;
+      color: #26384f;
+      text-decoration: none;
+      font-size: .92rem;
+    }
+
+    nav a:hover {
+      background: #dfe9f7;
+      color: var(--accent);
+    }
+
+    main {
+      padding: 42px;
+    }
+
+    article {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 48px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--paper);
+      box-shadow: 0 18px 50px rgba(31, 45, 61, .08);
+    }
+
+    .hero {
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 32px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--accent);
+      font-size: .78rem;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    h2, h3 {
+      scroll-margin-top: 24px;
+    }
+
+    h2 {
+      margin: 42px 0 12px;
+      font-size: 1.65rem;
+      line-height: 1.25;
+    }
+
+    h3 {
+      margin: 28px 0 10px;
+      font-size: 1.08rem;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(2rem, 4vw, 3.4rem);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .hero .summary {
+      max-width: 760px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    p { margin: 0 0 14px; }
+
+    ul {
+      margin: 10px 0 18px;
+      padding-left: 22px;
+    }
+
+    li { margin: 7px 0; }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #eef2f7;
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: .92em;
+    }
+
+    pre {
+      margin: 14px 0 22px;
+      padding: 18px;
+      border-radius: 10px;
+      overflow: auto;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: .86rem;
+      line-height: 1.55;
+    }
+
+    pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .card {
+      margin: 20px 0;
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fbfcff;
+    }
+
+    .note {
+      border-color: #b8c9ef;
+      background: var(--accent-soft);
+    }
+
+    .warning {
+      border-color: var(--warn-line);
+      background: var(--warn-bg);
+    }
+
+    .flow {
+      display: grid;
+      gap: 10px;
+      margin: 18px 0 24px;
+    }
+
+    .flow div {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fbfcff;
+    }
+
+    .flow b {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-size: .9rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 26px;
+      font-size: .94rem;
+    }
+
+    th, td {
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eef2f7;
+      color: #1f2a3d;
+    }
+
+    .path {
+      margin: 10px 0 18px;
+      padding: 11px 13px;
+      border-radius: 8px;
+      background: #f1f5f9;
+      color: #334155;
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: .9rem;
+      overflow-wrap: anywhere;
+    }
+
+    .print-tip {
+      margin-top: 36px;
+      color: var(--muted);
+      font-size: .92rem;
+    }
+
+    @media (max-width: 900px) {
+      .shell {
+        display: block;
+      }
+
+      nav {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      main {
+        padding: 18px;
+      }
+
+      article {
+        padding: 24px;
+        border-radius: 10px;
+      }
+    }
+
+    @media print {
+      body { background: white; }
+      nav { display: none; }
+      .shell { display: block; }
+      main { padding: 0; }
+      article {
+        max-width: none;
+        padding: 0;
+        border: 0;
+        box-shadow: none;
+      }
+      h2 { break-after: avoid; }
+      pre, table, .card, .flow div { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav>
+      <h1>Guia do Chatbot</h1>
+      <p>Material de estudo do fluxo de conversa, API e persona do lead.</p>
+      <a href="#visao-geral">1. Vis&atilde;o geral</a>
+      <a href="#arquitetura">2. Arquitetura</a>
+      <a href="#fluxo">3. Fluxo da mensagem</a>
+      <a href="#tela-chat">4. Tela do chat</a>
+      <a href="#api">5. API de simula&ccedil;&atilde;o</a>
+      <a href="#persona">6. Persona do lead</a>
+      <a href="#gemini">7. Envio ao Gemini</a>
+      <a href="#inbox">8. Conversas locais</a>
+      <a href="#dados">9. Dados dos leads</a>
+      <a href="#checklist">10. Checklist</a>
+    </nav>
+
+    <main>
+      <article>
+        <section class="hero">
+          <p class="eyebrow">Guia de estudo</p>
+          <h1>Entendendo o c&oacute;digo do chatbot</h1>
+          <p class="summary">
+            Este material organiza a parte do chatbot do projeto Leads EJ para facilitar
+            sua compreens&atilde;o: onde fica a interface, onde a resposta &eacute; gerada,
+            como a persona do lead &eacute; montada e como o fluxo completo funciona.
+          </p>
+        </section>
+
+        <section id="visao-geral">
+          <h2>1. Vis&atilde;o Geral</h2>
+          <p>
+            O chatbot n&atilde;o est&aacute; concentrado em um &uacute;nico arquivo. Ele &eacute;
+            formado por uma tela React, uma rota de API e dados que descrevem o lead.
+          </p>
+
+          <div class="card note">
+            <strong>Resumo em uma frase:</strong>
+            o frontend captura a mensagem do vendedor, envia para <code>/api/simulate</code>,
+            a API monta uma persona de lead e devolve uma resposta gerada pelo Gemini ou
+            por um fallback local.
+          </div>
+        </section>
+
+        <section id="arquitetura">
+          <h2>2. Arquitetura</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Parte</th>
+                <th>Arquivo</th>
+                <th>Responsabilidade</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Tela da simula&ccedil;&atilde;o</td>
+                <td><code>web/components/GeminiSimulation.tsx</code></td>
+                <td>Mostra o chat, guarda mensagens, recebe input e chama a API.</td>
+              </tr>
+              <tr>
+                <td>API do chatbot</td>
+                <td><code>web/app/api/simulate/route.ts</code></td>
+                <td>Valida a conversa, monta o prompt/persona e gera a resposta.</td>
+              </tr>
+              <tr>
+                <td>Caixa de entrada local</td>
+                <td><code>web/components/LocalConversations.tsx</code></td>
+                <td>Usa a mesma API em um formato de conversa ass&iacute;ncrona.</td>
+              </tr>
+              <tr>
+                <td>Dados dos leads</td>
+                <td><code>web/lib/leads.ts</code></td>
+                <td>Define perfil, dificuldade, obje&ccedil;&otilde;es e condi&ccedil;&otilde;es de reuni&atilde;o.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="fluxo">
+          <h2>3. Fluxo Da Mensagem</h2>
+          <div class="flow">
+            <div><b>1</b><span>O usu&aacute;rio digita uma abordagem no campo de texto.</span></div>
+            <div><b>2</b><span><code>send()</code> pega o texto, limpa o input e adiciona a mensagem no hist&oacute;rico local.</span></div>
+            <div><b>3</b><span>O frontend chama <code>/api/simulate</code> com <code>lead</code>, <code>scenario</code> e <code>messages</code>.</span></div>
+            <div><b>4</b><span>A API valida os dados e decide se usa Gemini ou resposta local de fallback.</span></div>
+            <div><b>5</b><span>A API monta a persona do lead e envia o hist&oacute;rico para o modelo.</span></div>
+            <div><b>6</b><span>A resposta volta para o frontend e aparece no chat como mensagem do lead.</span></div>
+          </div>
+
+          <h3>Caminho mental</h3>
+          <pre><code>Usuario
+  -&gt; GeminiSimulation.tsx
+  -&gt; /api/simulate
+  -&gt; Gemini API
+  -&gt; /api/simulate
+  -&gt; Tela do chat</code></pre>
+        </section>
+
+        <section id="tela-chat">
+          <h2>4. Tela Principal Do Chat</h2>
+          <p class="path">Arquivo: web/components/GeminiSimulation.tsx</p>
+          <p>
+            Esse componente controla a simula&ccedil;&atilde;o direta. Ele guarda o hist&oacute;rico,
+            o texto digitado, o estado de carregamento e poss&iacute;veis erros.
+          </p>
+
+          <pre><code>const [messages, setMessages] = useState&lt;Message[]&gt;([]);
+const [input, setInput] = useState("");
+const [thinking, setThinking] = useState(false);
+const [error, setError] = useState("");</code></pre>
+
+          <h3>O que cada estado significa</h3>
+          <ul>
+            <li><code>messages</code>: lista de mensagens exibidas no chat.</li>
+            <li><code>input</code>: texto que ainda est&aacute; no campo de digita&ccedil;&atilde;o.</li>
+            <li><code>thinking</code>: indica que o lead est&aacute; "pensando".</li>
+            <li><code>error</code>: guarda erro de API ou conex&atilde;o.</li>
+          </ul>
+
+          <h3>A fun&ccedil;&atilde;o mais importante: <code>send()</code></h3>
+          <pre><code>async function send() {
+  const text = input.trim();
+  if (!text || thinking) return;
+
+  const nextMessages = [...messages, { from: "seller", text }];
+
+  setMessages(nextMessages);
+  setInput("");
+  setError("");
+  setThinking(true);
+
+  const response = await fetch("/api/simulate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lead, scenario, messages: nextMessages })
+  });
+
+  const data = await response.json();
+  setMessages((current) =&gt; [...current, { from: "lead", text: data.text }]);
+}</code></pre>
+
+          <div class="card">
+            <strong>Como estudar este arquivo:</strong>
+            primeiro entenda os estados, depois leia <code>send()</code> de cima para baixo,
+            e por fim olhe o JSX para ver como cada estado aparece na interface.
+          </div>
+        </section>
+
+        <section id="api">
+          <h2>5. API De Simula&ccedil;&atilde;o</h2>
+          <p class="path">Arquivo: web/app/api/simulate/route.ts</p>
+          <p>
+            Essa rota &eacute; o c&eacute;rebro do chatbot. Ela recebe a conversa,
+            valida os dados, monta o comportamento do lead e retorna a resposta.
+          </p>
+
+          <pre><code>export async function POST(request: Request) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  const body = await request.json();
+
+  if (!body.lead || !Array.isArray(body.messages) || body.messages.length === 0) {
+    return Response.json({ error: "Conversa invalida." }, { status: 400 });
+  }
+}</code></pre>
+
+          <h3>Fallback local</h3>
+          <p>
+            Se n&atilde;o existir <code>GEMINI_API_KEY</code>, o sistema n&atilde;o chama o Gemini.
+            Em vez disso, usa <code>buildFallbackReply()</code>.
+          </p>
+
+          <pre><code>if (!apiKey) {
+  return Response.json({
+    text: buildFallbackReply(body.lead, body.messages),
+    model: "local-persona-fallback",
+    degraded: true
+  });
+}</code></pre>
+
+          <p>
+            O fallback observa a &uacute;ltima mensagem do vendedor. Se encontrar termos
+            como pre&ccedil;o, prazo, case ou cliente, devolve uma resposta coerente
+            com esse assunto.
+          </p>
+
+          <h3>Regra contra reuni&atilde;o cedo demais</h3>
+          <p>
+            Existe uma regra espec&iacute;fica para impedir que o vendedor tente marcar
+            reuni&atilde;o logo no come&ccedil;o, antes de diagnosticar o problema.
+          </p>
+
+          <pre><code>const attemptsEarlyMeeting =
+  /\b(reuni[a&atilde;]o|agenda|call|hor[a&aacute;]rio)\b/i.test(lastSellerMessage);
+
+if (attemptsEarlyMeeting && sellerMessages.length &lt; 4) {
+  return Response.json({
+    text: "Antes de marcar, eu ainda queria entender melhor..."
+  });
+}</code></pre>
+        </section>
+
+        <section id="persona">
+          <h2>6. Persona Do Lead</h2>
+          <p>
+            A vari&aacute;vel <code>systemInstruction</code> &eacute; onde o comportamento do lead
+            &eacute; definido. Ela transforma os dados do lead em instru&ccedil;&otilde;es para o modelo.
+          </p>
+
+          <pre><code>const systemInstruction = `
+Voce interpreta exclusivamente um lead ficticio em um treinamento comercial.
+PERSONA ATUAL: ${initialContact?.name || lead.name}, ${lead.role}
+CONTEXTO: problema atual: ${lead.problem}
+Solucao potencial: ${lead.solution}
+Objecao visivel: ${lead.visibleObjection}
+Preocupacao oculta: ${lead.hiddenConcern}
+DIFICULDADE: ${lead.difficulty}
+`;</code></pre>
+
+          <h3>Regras importantes da persona</h3>
+          <ul>
+            <li>N&atilde;o sair do personagem.</li>
+            <li>N&atilde;o dizer que &eacute; IA, prompt, ficha ou simula&ccedil;&atilde;o.</li>
+            <li>Responder como uma pessoa brasileira em contexto profissional.</li>
+            <li>N&atilde;o revelar todas as obje&ccedil;&otilde;es ao mesmo tempo.</li>
+            <li>N&atilde;o aceitar reuni&atilde;o nas primeiras mensagens.</li>
+            <li>Responder primeiro &agrave; pergunta atual do vendedor.</li>
+            <li>Manter continuidade com o que j&aacute; foi dito.</li>
+          </ul>
+
+          <div class="card note">
+            <strong>Ponto-chave:</strong>
+            o chatbot parece um lead porque o prompt define limites, estilo,
+            obje&ccedil;&otilde;es, dificuldade e condi&ccedil;&otilde;es para avan&ccedil;ar.
+          </div>
+        </section>
+
+        <section id="gemini">
+          <h2>7. Envio Ao Gemini</h2>
+          <p>
+            Antes de chamar o modelo, o c&oacute;digo converte o hist&oacute;rico da conversa
+            para o formato esperado pela API.
+          </p>
+
+          <pre><code>const contents = body.messages.slice(-24).map((message) =&gt; ({
+  role: message.from === "seller" ? "user" : "model",
+  parts: [{ text: message.text.slice(0, 4000) }],
+}));</code></pre>
+
+          <ul>
+            <li><code>seller</code> vira <code>user</code>.</li>
+            <li><code>lead</code> vira <code>model</code>.</li>
+            <li>Apenas as &uacute;ltimas 24 mensagens s&atilde;o enviadas.</li>
+            <li>Cada mensagem &eacute; limitada a 4000 caracteres.</li>
+          </ul>
+
+          <p>
+            Depois disso, a API tenta chamar uma lista de modelos Gemini. Se houver
+            falha tempor&aacute;ria, ela tenta novamente ou usa fallback.
+          </p>
+        </section>
+
+        <section id="inbox">
+          <h2>8. Conversas Locais</h2>
+          <p class="path">Arquivo: web/components/LocalConversations.tsx</p>
+          <p>
+            Esse componente usa a mesma rota <code>/api/simulate</code>, mas cria uma
+            experi&ecirc;ncia de inbox. O vendedor pode escrever uma ou mais mensagens
+            antes de realmente enviar ao lead.
+          </p>
+
+          <h3><code>sendOne()</code></h3>
+          <pre><code>const sendOne = async () =&gt; {
+  const text = drafts[conversation.id]?.trim();
+  if (!text) return;
+
+  setDrafts(current =&gt; ({ ...current, [conversation.id]: "" }));
+  await onSend(conversation.id, text, contact.id, "seller");
+};</code></pre>
+
+          <h3><code>deliver()</code></h3>
+          <pre><code>const response = await fetch("/api/simulate", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    lead: { ... },
+    messages: conversation.messages.map(...)
+  })
+});</code></pre>
+
+          <div class="card">
+            <strong>Diferen&ccedil;a principal:</strong>
+            <code>GeminiSimulation.tsx</code> &eacute; conversa imediata.
+            <code>LocalConversations.tsx</code> &eacute; conversa ass&iacute;ncrona, estilo caixa de entrada.
+          </div>
+        </section>
+
+        <section id="dados">
+          <h2>9. Dados Dos Leads</h2>
+          <p class="path">Arquivo: web/lib/leads.ts</p>
+          <p>
+            Esse arquivo define o formato dos leads simulados. Esses dados alimentam
+            a persona usada pela API.
+          </p>
+
+          <pre><code>export type LeadProfile = {
+  name: string;
+  role: string;
+  segment: string;
+  companySize: string;
+  solution: string;
+  problem: string;
+  difficulty: LeadDifficulty;
+  visibleObjection: string;
+  secondaryObjection: string;
+  hiddenConcern: string;
+  meetingConditions: string;
+};</code></pre>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Campo</th>
+                <th>Como afeta o chatbot</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>difficulty</code></td>
+                <td>Define se o lead responde de forma f&aacute;cil, intermedi&aacute;ria ou dif&iacute;cil.</td>
+              </tr>
+              <tr>
+                <td><code>visibleObjection</code></td>
+                <td>Primeira obje&ccedil;&atilde;o que pode aparecer naturalmente.</td>
+              </tr>
+              <tr>
+                <td><code>secondaryObjection</code></td>
+                <td>Obje&ccedil;&atilde;o revelada depois de alguma investiga&ccedil;&atilde;o.</td>
+              </tr>
+              <tr>
+                <td><code>hiddenConcern</code></td>
+                <td>Preocupa&ccedil;&atilde;o oculta que n&atilde;o deve ser entregue cedo.</td>
+              </tr>
+              <tr>
+                <td><code>meetingConditions</code></td>
+                <td>Condi&ccedil;&otilde;es m&iacute;nimas para aceitar pr&oacute;xima conversa.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="checklist">
+          <h2>10. Checklist De Estudo</h2>
+          <ul>
+            <li>Entender os estados em <code>GeminiSimulation.tsx</code>.</li>
+            <li>Ler a fun&ccedil;&atilde;o <code>send()</code> de cima para baixo.</li>
+            <li>Seguir o <code>fetch("/api/simulate")</code>.</li>
+            <li>Ler a valida&ccedil;&atilde;o inicial da rota <code>POST</code>.</li>
+            <li>Entender quando a API usa fallback local.</li>
+            <li>Ler <code>systemInstruction</code> como se fosse o roteiro do personagem.</li>
+            <li>Entender como <code>contents</code> transforma mensagens para o Gemini.</li>
+            <li>Comparar <code>GeminiSimulation.tsx</code> com <code>LocalConversations.tsx</code>.</li>
+          </ul>
+
+          <div class="card warning">
+            <strong>Resumo final:</strong>
+            a interface mostra mensagens e captura texto; a API monta a persona,
+            aplica regras e chama o modelo; os dados do lead definem quem ele &eacute;,
+            quais obje&ccedil;&otilde;es possui e quando aceita avan&ccedil;ar.
+          </div>
+
+          <p class="print-tip">
+            Dica: este HTML tamb&eacute;m pode ser impresso como PDF pelo navegador usando
+            Ctrl+P e escolhendo "Salvar como PDF".
+          </p>
+        </section>
+      </article>
+    </main>
+  </div>
+</body>
+</html>
