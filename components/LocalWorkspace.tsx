@@ -327,13 +327,13 @@ function LocalWorkspaceInner({ service, profile, initialSection, onLogout }: { s
   return (
     <main className="local-shell">
       <aside className="local-nav">
-        <div className="brand"><span className="brand-mark">S</span><span>Simula</span></div>
+        <div className="brand"><span className="brand-mark">S</span><span>simulaLEAD</span></div>
         <div className="local-org"><span>{orgName.slice(0, 2).toUpperCase()}</span><div><small>Workspace</small><b>{orgName}</b></div></div>
         <nav>{workspaceRoutes.map(({ section: id, label }) => <button key={id} className={section === id ? "active" : ""} onClick={() => navigate(id)}>{label}<b>{count(id, data) || ""}</b></button>)}</nav>
         <div className="local-nav-footer"><button className="logout-button" onClick={onLogout}>Sair</button></div>
       </aside>
       <section className="local-content">
-        <header>SIMULA / {workspaceRoutes.find((item) => item.section === section)?.label}</header>
+        <header><span>Workspace</span><b>{workspaceRoutes.find((item) => item.section === section)?.label}</b><i aria-hidden="true" /></header>
         <div className="local-page">
           {error && <div className="local-error">{error}</div>}
           <Content
