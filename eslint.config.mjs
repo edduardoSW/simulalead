@@ -14,6 +14,7 @@ const eslintConfig = defineConfig([
     "output/**",
     "tmp/**",
     "web/**",
+    "simulalead-main/**",
     "supabase/**",
     "next-env.d.ts",
   ]),

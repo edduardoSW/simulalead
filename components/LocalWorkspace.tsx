@@ -19,6 +19,7 @@ import { LocalLeads } from "./LocalLeads";
 import { LocalConversations } from "./LocalConversations";
 import { LocalTrainings } from "./LocalTrainings";
 import { SupabaseTeamManagement } from "./LocalAuth";
+import { GeminiUsagePanel } from "./GeminiUsagePanel";
 
 type Profile = { id: string; organization_id: string; role: string };
 type Sender = "seller" | "contact";
@@ -413,7 +414,7 @@ function Opportunities({ data, onOpen }: { data: LocalData; onOpen: () => void }
 }
 
 function Settings({ profile }: { profile: Profile }) {
-  return <><Title eyebrow="SUPABASE" title="Configuracoes e acesso" text="Gerencie sua equipe e as permissoes do workspace." /><div className="settings-cards"><SupabaseTeamManagement organizationId={profile.organization_id} isAdmin={profile.role === "admin"} /><article><h3>Privacidade</h3><p>Autenticacao pelo Supabase Auth e isolamento multiempresa por RLS.</p></article></div></>;
+  return <><Title eyebrow="SUPABASE" title="Configuracoes e acesso" text="Gerencie sua equipe, permissoes e consumo da IA." /><div className="settings-cards"><SupabaseTeamManagement organizationId={profile.organization_id} isAdmin={profile.role === "admin"} /><GeminiUsagePanel /><article><h3>Privacidade</h3><p>Autenticacao pelo Supabase Auth e isolamento multiempresa por RLS.</p></article></div></>;
 }
 
 const stageLabel = (stage: string) => ({ prospecting: "Prospeccao", first_contact: "Primeiro contato", initial_qualification: "Qualificacao inicial", responsible_identification: "Identificacao do responsavel", handoff: "Encaminhamento", discovery: "Descoberta", decision_mapping: "Mapa de decisao", objection_handling: "Objecoes", diagnostic_meeting: "Reuniao diagnostica", proposal: "Proposta", negotiation: "Negociacao", closed_won: "Fechada", closed_lost: "Perdida", no_response: "Sem resposta" }[stage] || stage);

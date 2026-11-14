@@ -5,4 +5,3 @@ const key=process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||process.env.NEXT_PUB
 
 export const hasSupabaseConfig=Boolean(url&&key);
 export const supabase=createClient(url||"https://invalid.supabase.co",key||"invalid",{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
-export function isolatedSupabase(){return createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}})}

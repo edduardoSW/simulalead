@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  buildConversationMemory,
+  buildOptimizedSimulationInstruction,
   buildSimulationInstruction,
   deriveCommercialState,
   normalizeSimulationMessages,
   parseLeadReply,
   selectSimulationContext,
+  selectOptimizedSimulationContext,
   simulationEndedMarker,
   shouldDeclineEarlyMeeting,
   toGeminiContents,
+  toOptimizedGeminiContents,
 } from "../lib/simulation-context.ts";
 import {
   generationKey,
@@ -75,6 +79,30 @@ test("keeps recent turns and older commercial commitments without generating a s
   assert.ok(selected.length <= 16);
   assert.ok(selected.some((message) => message.id === "m-2"));
   assert.deepEqual(selected.slice(-12).map((message) => message.id), messages.slice(-12).map((message) => message.id));
+});
+
+test("uses local extractive memory and sends only the recent conversation window", () => {
+  const messages = Array.from({ length: 24 }, (_, index) => ({
+    id: `memory-${index}`,
+    from: index % 2 === 0 ? "seller" : "lead",
+    text: index === 4
+      ? "Combinamos que o orçamento será enviado e a diretoria decide na sexta."
+      : `Mensagem detalhada de continuidade comercial ${index} com informacoes da negociacao.`,
+  }));
+  const memory = buildConversationMemory(messages);
+  const selected = selectOptimizedSimulationContext(messages);
+  assert.match(memory, /orçamento será enviado/i);
+  assert.ok(selected.length <= 8);
+  assert.deepEqual(selected.map((message) => message.id), messages.slice(-8).map((message) => message.id));
+
+  const oldPayloadCharacters = buildSimulationInstruction(bruno, messages).length + JSON.stringify(toGeminiContents(messages)).length;
+  const optimizedPrompt = buildOptimizedSimulationInstruction(bruno, messages);
+  const optimizedPayloadCharacters = optimizedPrompt.length + JSON.stringify(toOptimizedGeminiContents(messages)).length;
+  assert.match(optimizedPrompt, /Bruno Freitas/);
+  assert.match(optimizedPrompt, /Minha equipe nao tera tempo/);
+  assert.match(optimizedPrompt, /nao confia no retorno prometido/);
+  assert.match(optimizedPrompt, /influencer/i);
+  assert.ok(optimizedPayloadCharacters < oldPayloadCharacters * 0.7, `${optimizedPayloadCharacters} should be below 70% of ${oldPayloadCharacters}`);
 });
 
 test("does not treat the related service as a presented proposal until the seller says it", () => {
@@ -201,15 +229,34 @@ test("checks persisted status before retrying and reconciles a saved response", 
 test("limits Gemini consumption and records provider calls and tokens", async () => {
   const [route, migration] = await Promise.all([
     readFile(new URL("../app/api/simulate/route.ts", import.meta.url), "utf8"),
-    readFile(new URL("../supabase/migrations/202610010004_simulation_usage_metrics.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/202611140002_gemini_efficiency.sql", import.meta.url), "utf8"),
   ]);
-  assert.match(route, /maxOutputTokens:\s*480/);
+  assert.match(route, /GEMINI_MAX_OUTPUT_TOKENS",\s*180/);
+  assert.match(route, /configuredThinkingLevel/);
   assert.match(route, /for \(let attempt = 0; attempt < 2; attempt \+= 1\)/);
   assert.doesNotMatch(route, /const models\s*=/);
+  assert.match(route, /check_gemini_usage_limit/);
+  assert.match(route, /isDailyOrBillingQuota/);
   assert.match(route, /record_simulation_generation_usage/);
-  assert.match(migration, /provider_call_count/);
-  assert.match(migration, /total_token_count/);
+  assert.match(migration, /gemini_usage_events/);
+  assert.match(migration, /grant execute on function public\.record_simulation_generation_usage[\s\S]*to service_role/);
+  assert.match(migration, /cached_tokens/);
+  assert.match(migration, /PROJECT_DAILY_QUOTA/);
+  assert.match(migration, /USER_RPM_LIMIT/);
+  assert.match(migration, /gemini_request_reservations/);
   assert.match(migration, /security_invoker = true/);
+});
+
+test("exposes tenant-scoped Gemini monitoring by user and simulation", async () => {
+  const [migration, panel] = await Promise.all([
+    readFile(new URL("../supabase/migrations/202611140002_gemini_efficiency.sql", import.meta.url), "utf8"),
+    readFile(new URL("../components/GeminiUsagePanel.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(migration, /create policy gemini_usage_events_read/);
+  assert.match(migration, /seller_id = auth\.uid\(\)/);
+  assert.match(migration, /public\.has_role\(array\['admin','manager'\]/);
+  assert.match(panel, /gemini_usage_by_user/);
+  assert.match(panel, /gemini_usage_by_simulation/);
 });
 
 test("persists idempotent generation state behind authenticated ownership checks", async () => {

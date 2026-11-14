@@ -1,16 +1,17 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
-  buildSimulationInstruction,
+  buildOptimizedSimulationInstruction,
   isNaturalReply,
   normalizeSimulationMessages,
   parseLeadReply,
   shouldDeclineEarlyMeeting,
-  toGeminiContents,
+  toOptimizedGeminiContents,
   type SimulationChatMessage,
   type SimulationLeadPayload,
 } from "../../../lib/simulation-context";
 import { migrateLocalData } from "../../../lib/local-domain";
 import { buildGenerationSnapshot } from "../../../lib/simulation-snapshot";
+import { createAdminSupabase } from "../../../lib/supabase-server";
 
 type SimulationRequest = {
   conversationId?: string;
@@ -32,7 +33,7 @@ type SimulationResult = {
 type GeminiPayload = {
   candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string }> } }>;
   error?: {
-    code?: number;
+    code?: number | string;
     message?: string;
     status?: string;
     details?: Array<{
@@ -46,6 +47,7 @@ type GeminiPayload = {
     promptTokenCount?: number;
     candidatesTokenCount?: number;
     thoughtsTokenCount?: number;
+    cachedContentTokenCount?: number;
     totalTokenCount?: number;
   };
 };
@@ -67,7 +69,18 @@ type ProviderAttemptMetric = {
   promptTokens: number;
   candidateTokens: number;
   thoughtTokens: number;
+  cachedTokens: number;
   totalTokens: number;
+  durationMs: number;
+};
+
+type UsageLimitRow = {
+  allowed?: boolean;
+  limit_reason?: string | null;
+  retry_after_seconds?: number;
+  requests_last_minute?: number;
+  requests_today?: number;
+  tokens_today?: number;
 };
 
 type GenerationRow = { claimed?: boolean; generation_status?: "processing" | "completed" | "failed"; generation_request_id?: string; response_text?: string | null; error_message?: string | null };
@@ -118,6 +131,20 @@ function configuredGeminiTimeoutMs() {
   return Number.isFinite(configured) && configured >= 5_000 ? configured : defaultGeminiTimeoutMs;
 }
 
+function configuredGeminiModel() {
+  return process.env.GEMINI_MODEL?.trim() || "gemini-3.8-flash";
+}
+
+function configuredPositiveInteger(name: string, fallback: number, maximum: number) {
+  const configured = Number(process.env[name] || "");
+  return Number.isInteger(configured) && configured > 0 && configured <= maximum ? configured : fallback;
+}
+
+function configuredThinkingLevel() {
+  const configured = process.env.GEMINI_THINKING_LEVEL?.trim().toLowerCase();
+  return configured && ["minimal", "low", "medium", "high"].includes(configured) ? configured : "minimal";
+}
+
 function parseRetryAfterSeconds(headerValue: string | null, message = "") {
   if (headerValue) {
     const seconds = Number(headerValue);
@@ -156,11 +183,17 @@ function providerAttemptMetric(model: string, attempt: GeminiAttempt, finishReas
     promptTokens: Number(usage?.promptTokenCount || 0),
     candidateTokens: Number(usage?.candidatesTokenCount || 0),
     thoughtTokens: Number(usage?.thoughtsTokenCount || 0),
+    cachedTokens: Number(usage?.cachedContentTokenCount || 0),
     totalTokens: Number(usage?.totalTokenCount || 0),
+    durationMs: attempt.durationMs,
   };
 }
 
-function userFacingGeminiError(status: number, providerMessage: string, model: string, retryAfterSeconds?: number) {
+function isDailyOrBillingQuota(reason: string | null, message: string) {
+  return /daily|per.?day|requestsperday|quota_exceeded|billing|balance|credit/i.test(`${reason || ""} ${message}`);
+}
+
+function userFacingGeminiError(status: number, providerMessage: string, model: string, retryAfterSeconds?: number, quotaReason: string | null = null) {
   const message = providerMessage.toLowerCase();
   if (status === 401 || status === 403) {
     return technicalResult("A chave do Gemini foi recusada. Verifique GEMINI_API_KEY e permissoes do projeto.", status, false, { providerStatus: status, model });
@@ -170,10 +203,11 @@ function userFacingGeminiError(status: number, providerMessage: string, model: s
   }
   if (status === 429) {
     const wait = retryAfterSeconds ? ` Tente novamente em cerca de ${retryAfterSeconds}s.` : " Tente novamente mais tarde.";
-    const exhausted = /quota|resource_exhausted|billing|limit/i.test(providerMessage);
-    return technicalResult(`Limite de uso do Gemini atingido.${wait}`, 429, true, {
+    const dailyOrBilling = isDailyOrBillingQuota(quotaReason, providerMessage);
+    return technicalResult(`Limite de uso do Gemini atingido.${wait}`, 429, !dailyOrBilling, {
       providerStatus: status,
-      providerReason: exhausted ? "RESOURCE_EXHAUSTED" : "RATE_LIMITED",
+      providerReason: dailyOrBilling ? "DAILY_OR_BILLING_QUOTA" : "RATE_LIMITED",
+      quotaReason,
       retryAfterSeconds,
       model,
     });
@@ -350,7 +384,16 @@ export async function POST(request: Request) {
     if (Number.isFinite(contentLength) && contentLength > maxRequestBodyBytes) {
       return toResponse(technicalResult("Solicitacao muito grande.", 413, false));
     }
-    const parsedBody: unknown = await request.json();
+    const rawBody = await request.text();
+    if (new TextEncoder().encode(rawBody).byteLength > maxRequestBodyBytes) {
+      return toResponse(technicalResult("Solicitacao muito grande.", 413, false));
+    }
+    let parsedBody: unknown;
+    try {
+      parsedBody = JSON.parse(rawBody);
+    } catch {
+      return toResponse(technicalResult("Corpo da solicitacao invalido.", 400, false));
+    }
     if (!hasValidIdentifiers(parsedBody)) {
       return toResponse(technicalResult("Identificadores da simulacao invalidos.", 400, false));
     }
@@ -405,9 +448,11 @@ export async function POST(request: Request) {
 
     const promise = generateAndPersist(auth, requestBody, lead, messages, diagnostic);
     generationCache.set(cacheKey, promise);
-    const result = await promise;
-    generationCache.delete(cacheKey);
-    return toResponse(result);
+    try {
+      return toResponse(await promise);
+    } finally {
+      if (generationCache.get(cacheKey) === promise) generationCache.delete(cacheKey);
+    }
   } catch (error) {
     logDiagnostic("Erro inesperado na simulacao.", {
       conversationId: requestBody?.conversationId || "unknown",
@@ -429,20 +474,29 @@ async function generateAndPersist(
   const conversationId = requestBody.conversationId!;
   const batchId = requestBody.batchId!;
   const requestId = requestBody.requestId!;
-  const result = await generateSimulationResult(requestBody, lead, messages, diagnostic, async (metric) => {
-    const { error } = await auth.client.rpc("record_simulation_generation_usage", {
-      requested_conversation_id: conversationId,
-      requested_batch_id: batchId,
-      requested_request_id: requestId,
-      requested_provider_model: metric.model,
-      requested_provider_status: metric.status,
-      requested_quota_reason: metric.quotaReason,
-      requested_prompt_tokens: metric.promptTokens,
-      requested_candidate_tokens: metric.candidateTokens,
-      requested_thought_tokens: metric.thoughtTokens,
-      requested_total_tokens: metric.totalTokens,
-    });
-    if (error) logDiagnostic("Falha ao registrar consumo Gemini.", { ...diagnostic, providerStatus: metric.status });
+  const requiresProvider = Boolean(process.env.GEMINI_API_KEY) && !shouldDeclineEarlyMeeting(messages);
+  const usageLimit = requiresProvider ? await checkUsageLimit(auth, configuredGeminiModel(), requestId) : null;
+  const result = usageLimit || await generateSimulationResult(requestBody, lead, messages, diagnostic, async (metric) => {
+    try {
+      const { error } = await createAdminSupabase().rpc("record_simulation_generation_usage", {
+        requested_seller_id: auth.userId,
+        requested_conversation_id: conversationId,
+        requested_batch_id: batchId,
+        requested_request_id: requestId,
+        requested_provider_model: metric.model,
+        requested_provider_status: metric.status,
+        requested_quota_reason: metric.quotaReason,
+        requested_prompt_tokens: metric.promptTokens,
+        requested_candidate_tokens: metric.candidateTokens,
+        requested_thought_tokens: metric.thoughtTokens,
+        requested_cached_tokens: metric.cachedTokens,
+        requested_total_tokens: metric.totalTokens,
+        requested_duration_ms: metric.durationMs,
+      });
+      if (error) logDiagnostic("Falha ao registrar consumo Gemini.", { ...diagnostic, providerStatus: metric.status });
+    } catch {
+      logDiagnostic("Metricas Gemini indisponiveis: service role ausente.", { ...diagnostic, providerStatus: metric.status });
+    }
   });
   const text = typeof result.body.text === "string" ? result.body.text : "";
   if (result.status >= 200 && result.status < 300 && text) {
@@ -464,6 +518,34 @@ async function generateAndPersist(
     failure_message: failureMessage,
   });
   return result;
+}
+
+async function checkUsageLimit(auth: AuthenticatedRequest, model: string, requestId: string): Promise<SimulationResult | null> {
+  const { data, error } = await auth.client.rpc("check_gemini_usage_limit", {
+    requested_provider_model: model,
+    requested_request_id: requestId,
+    requested_rpm_limit: configuredPositiveInteger("GEMINI_USER_RPM_LIMIT", 4, 1000),
+    requested_daily_request_limit: configuredPositiveInteger("GEMINI_USER_DAILY_REQUEST_LIMIT", 50, 1_000_000),
+    requested_daily_token_limit: configuredPositiveInteger("GEMINI_USER_DAILY_TOKEN_LIMIT", 200_000, 10_000_000_000),
+  });
+  if (error) return technicalResult("Nao foi possivel validar o limite de uso do Gemini.", 503, true);
+  const limit = (Array.isArray(data) ? data[0] : data) as UsageLimitRow | null;
+  if (!limit || limit.allowed !== false) return null;
+  const retryAfterSeconds = Number(limit.retry_after_seconds || 0);
+  const daily = limit.limit_reason === "PROJECT_DAILY_QUOTA" || limit.limit_reason === "USER_DAILY_REQUEST_LIMIT" || limit.limit_reason === "USER_DAILY_TOKEN_LIMIT";
+  const label = limit.limit_reason === "USER_RPM_LIMIT"
+    ? "Limite de requisicoes por minuto atingido."
+    : "Limite diario de uso atingido.";
+  return technicalResult(`${label} Tente novamente em cerca de ${retryAfterSeconds}s.`, 429, !daily, {
+    providerReason: limit.limit_reason,
+    retryAfterSeconds,
+    usage: {
+      requestsLastMinute: Number(limit.requests_last_minute || 0),
+      requestsToday: Number(limit.requests_today || 0),
+      tokensToday: Number(limit.tokens_today || 0),
+    },
+    model,
+  });
 }
 
 async function generateSimulationResult(
@@ -491,17 +573,17 @@ async function generateSimulationResult(
     });
   }
 
-  const systemInstruction = buildSimulationInstruction(lead, messages);
-  const contents = toGeminiContents(messages);
-  const preferredModel = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+  const systemInstruction = buildOptimizedSimulationInstruction(lead, messages);
+  const contents = toOptimizedGeminiContents(messages);
+  const preferredModel = configuredGeminiModel();
   const timeoutMs = configuredGeminiTimeoutMs();
   const geminiBody = JSON.stringify({
     systemInstruction: { parts: [{ text: systemInstruction }] },
     contents,
     generationConfig: {
-      temperature: lead.difficulty === "Difícil" || lead.difficulty === "DifÃ­cil" ? 0.85 : 0.75,
-      maxOutputTokens: 480,
-      thinkingConfig: { thinkingLevel: "low" },
+      temperature: lead.difficulty === "Difícil" || lead.difficulty === "DifÃ­cil" ? 0.8 : 0.7,
+      maxOutputTokens: configuredPositiveInteger("GEMINI_MAX_OUTPUT_TOKENS", 180, 480),
+      ...(preferredModel.startsWith("gemini-3") ? { thinkingConfig: { thinkingLevel: configuredThinkingLevel() } } : {}),
     },
   });
   let lastStatus = 502;
@@ -515,7 +597,8 @@ async function generateSimulationResult(
     lastStatus = gemini.status;
     lastError = gemini.errorMessage || "";
     const finishReason = gemini.data?.candidates?.[0]?.finishReason || "";
-    await recordAttempt(providerAttemptMetric(model, gemini, finishReason));
+    const metric = providerAttemptMetric(model, gemini, finishReason);
+    await recordAttempt(metric);
 
     logDiagnostic("Tentativa Gemini concluida.", {
       ...diagnostic,
@@ -551,7 +634,7 @@ async function generateSimulationResult(
       });
     }
 
-    if ([400, 401, 403, 404, 429].includes(gemini.status) || /quota|resource_exhausted|billing/i.test(lastError)) {
+    if ([400, 401, 403, 404].includes(gemini.status) || /billing|balance|credit/i.test(lastError)) {
       logDiagnostic("Falha Gemini nao reexecutada automaticamente.", {
         ...diagnostic,
         model,
@@ -559,13 +642,23 @@ async function generateSimulationResult(
         providerStatus: gemini.status,
         providerError: lastError ? shortProviderMessage(lastError) : "none",
       });
-      return userFacingGeminiError(gemini.status, lastError, model, gemini.retryAfterSeconds);
+      return userFacingGeminiError(gemini.status, lastError, model, gemini.retryAfterSeconds, metric.quotaReason);
+    }
+
+    if (gemini.status === 429) {
+      const dailyOrBilling = isDailyOrBillingQuota(metric.quotaReason, lastError);
+      const waitSeconds = gemini.retryAfterSeconds;
+      if (dailyOrBilling || attempt > 0 || !waitSeconds || waitSeconds > 20) {
+        return userFacingGeminiError(gemini.status, lastError, model, gemini.retryAfterSeconds, metric.quotaReason);
+      }
+      retryDelayMs = Math.max(1_500, waitSeconds * 1_000);
+      continue;
     }
 
     const temporaryFailure =
       temporaryFailureStatus.has(gemini.status) || /high demand|overloaded|temporar/i.test(lastError);
     if (!temporaryFailure) break;
-    retryDelayMs = gemini.retryAfterSeconds ? gemini.retryAfterSeconds * 1_000 : 1_200;
+    retryDelayMs = gemini.retryAfterSeconds ? gemini.retryAfterSeconds * 1_000 : Math.min(8_000, 1_200 * (2 ** attempt));
   }
 
   logDiagnostic("Falha ao gerar resposta Gemini.", { ...diagnostic, lastStatus, lastError: lastError ? shortProviderMessage(lastError) : "none" });

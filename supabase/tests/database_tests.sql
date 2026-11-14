@@ -20,6 +20,26 @@ do $$ begin
   assert to_regclass('public.conversation_participants') is not null, 'conversation participants table missing';
   assert to_regclass('public.contact_handoffs') is not null, 'contact handoffs table missing';
   assert to_regclass('public.organization_invitations') is not null, 'organization invitations table missing';
+  assert to_regclass('public.organization_audit_events') is not null, 'organization audit table missing';
+  assert to_regclass('public.gemini_usage_events') is not null, 'Gemini usage event table missing';
+  assert to_regclass('public.gemini_usage_by_user') is not null, 'Gemini user usage view missing';
+  assert to_regclass('public.gemini_usage_by_simulation') is not null, 'Gemini simulation usage view missing';
+  assert to_regprocedure('public.check_gemini_usage_limit(text,text,integer,integer,bigint)') is not null,
+    'Gemini usage limit function missing';
+  assert exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='user_simulations' and column_name='version'
+  ), 'user_simulations version missing';
+  assert exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='workspace_states' and column_name='version'
+  ), 'workspace version column missing';
+  assert to_regprocedure('public.save_workspace_and_simulations(jsonb,jsonb,bigint)') is not null,
+    'atomic workspace save function missing';
+  assert not has_table_privilege('authenticated','public.workspace_states','INSERT'),
+    'authenticated must not write workspace_states directly';
+  assert not has_table_privilege('authenticated','public.user_simulations','UPDATE'),
+    'authenticated must not write user_simulations directly';
 end $$;
 
 rollback;
