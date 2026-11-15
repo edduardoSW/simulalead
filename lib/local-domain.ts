@@ -17,7 +17,7 @@ export type LocalScenario = { id:Id; title:string; objective:string; trainingLea
 export type LocalMessage = { id:Id; sender:"seller"|"contact"|"system"; contactId?:Id; text:string; createdAt:string; status?:"sending"|"sent"|"waiting"|"answered"|"failed"; batchId?:Id; requestId?:Id; endsSimulation?:boolean };
 export type LocalHandoff = { id:Id; fromContactId:Id; toContactId:Id; reason:string; stage:SalesStage; createdAt:string };
 export type LocalConversation = { id:Id; opportunityId:Id; accountId:Id; currentContactId:Id; scenarioId?:Id; sellerId:Id; messages:LocalMessage[]; handoffs:LocalHandoff[]; status:"active"|"completed"; unread:number; updatedAt:string };
-export type LocalEvaluation = { id:Id; conversationId:Id; score:number; summary:string; createdAt:string };
+export type LocalEvaluation = { id:Id; conversationId:Id; score:number; summary:string; strengths?:string[]; improvements?:string[]; nextStep?:string; createdAt:string };
 export type LocalNotification = { id:Id; title:string; conversationId?:Id; read:boolean; createdAt:string };
 export type LocalData = { organization:LocalOrganization|null; products:LocalProduct[]; sellers:LocalSeller[]; accounts:LocalAccount[]; opportunities:LocalOpportunity[]; scenarios:LocalScenario[]; conversations:LocalConversation[]; evaluations:LocalEvaluation[]; notifications:LocalNotification[] };
 export const emptyLocalData=():LocalData=>({organization:null,products:[],sellers:[],accounts:[],opportunities:[],scenarios:[],conversations:[],evaluations:[],notifications:[]});

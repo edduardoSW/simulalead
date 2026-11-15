@@ -320,6 +320,16 @@ function LocalWorkspaceInner({ service, profile, initialSection, onLogout }: { s
     setGenerationErrors((current) => reconcileGenerationErrors(current, data.conversations));
   }, [data.conversations]);
 
+  const evaluateConversation = useCallback(async (conversationId: string) => {
+    try {
+      const next = await service.evaluateConversation(conversationId);
+      commitData(next);
+      navigate("evaluations");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Nao foi possivel gerar a avaliacao.");
+    }
+  }, [commitData, navigate, service]);
+
   if (loading) return <LoadingScreen text="Carregando dados" />;
   if (!data.organization) return <StartupErrorScreen title="Workspace indisponivel" message={error || "Nao encontramos os dados necessarios para abrir a organizacao."} onAction={() => window.location.reload()} />;
 
@@ -351,6 +361,7 @@ function LocalWorkspaceInner({ service, profile, initialSection, onLogout }: { s
             onReadConversation={markConversationRead}
             onSendMessage={addMessage}
             onConfirmBatch={confirmBatch}
+            onEvaluateConversation={evaluateConversation}
           />
         </div>
       </section>
@@ -383,6 +394,7 @@ function Content({
   onReadConversation,
   onSendMessage,
   onConfirmBatch,
+  onEvaluateConversation,
 }: {
   section: WorkspaceSection;
   data: LocalData;
@@ -398,14 +410,15 @@ function Content({
   onReadConversation: (conversationId: string) => Promise<void>;
   onSendMessage: (id: string, text: string, contactId?: string, sender?: Sender, batchId?: string, requestId?: string) => Promise<void>;
   onConfirmBatch: (conversationId: string, batchId: string) => Promise<void>;
+  onEvaluateConversation: (conversationId: string) => Promise<void>;
 }) {
   const organization = data.organization;
   if (section === "home") return <><Title eyebrow="VISAO GERAL" title={`Ola, ${organization?.ownerName || "time"}.`} text="Treine vendas de projetos de TI com oportunidades completas." /><div className="real-metrics"><Stat value={data.opportunities.length} label="Oportunidades" /><Stat value={data.conversations.length} label="Conversas" /><Stat value={data.scenarios.length} label="Treinamentos" /><Stat value={data.evaluations.length} label="Avaliacoes" /></div></>;
   if (section === "leads") return <LocalLeads data={data} onStart={async (id) => { try { const next = await service.startConversation(id, profile.id); setData(next); const started = next.conversations.find((conversation) => conversation.accountId === id && conversation.status === "active" && conversation.sellerId === profile.id); if (started) onSelectConversation(started.id); navigate("conversations"); } catch (cause) { setError(cause instanceof Error ? cause.message : "Nao foi possivel iniciar"); } }} />;
   if (section === "opportunities") return <Opportunities data={data} onOpen={() => navigate("leads")} />;
-  if (section === "conversations") return <LocalConversations data={data} selectedConversationId={selectedConversationId} activeGenerations={activeGenerations} generationErrors={generationErrors} onSelect={onSelectConversation} onRead={onReadConversation} onSend={onSendMessage} onConfirmBatch={onConfirmBatch} onStartAnother={() => navigate("leads")} />;
+  if (section === "conversations") return <LocalConversations data={data} selectedConversationId={selectedConversationId} activeGenerations={activeGenerations} generationErrors={generationErrors} onSelect={onSelectConversation} onRead={onReadConversation} onSend={onSendMessage} onConfirmBatch={onConfirmBatch} onEvaluate={onEvaluateConversation} onStartAnother={() => navigate("leads")} />;
   if (section === "scenarios") return <LocalTrainings scenarios={data.scenarios} />;
-  if (section === "evaluations") return <><Title eyebrow="DESENVOLVIMENTO" title="Avaliacoes" text="Resultados apos concluir um treinamento." /><Empty title="Nenhuma avaliacao disponivel" text="Conclua uma conversa para gerar uma avaliacao." /></>;
+  if (section === "evaluations") return <Evaluations data={data} onOpenConversation={(conversationId) => { onSelectConversation(conversationId); navigate("conversations"); }} />;
   return <Settings profile={profile} />;
 }
 
@@ -415,6 +428,10 @@ function Opportunities({ data, onOpen }: { data: LocalData; onOpen: () => void }
 
 function Settings({ profile }: { profile: Profile }) {
   return <><Title eyebrow="SUPABASE" title="Configuracoes e acesso" text="Gerencie sua equipe, permissoes e consumo da IA." /><div className="settings-cards"><SupabaseTeamManagement organizationId={profile.organization_id} isAdmin={profile.role === "admin"} /><GeminiUsagePanel /><article><h3>Privacidade</h3><p>Autenticacao pelo Supabase Auth e isolamento multiempresa por RLS.</p></article></div></>;
+}
+
+function Evaluations({ data, onOpenConversation }: { data: LocalData; onOpenConversation: (conversationId: string) => void }) {
+  return <><Title eyebrow="FEEDBACK DE VENDAS" title="Avaliações" text="Feedback objetivo para transformar cada conversa em evolução prática." />{data.evaluations.length === 0 ? <Empty title="Nenhuma avaliação disponível" text="Quando uma conversa for encerrada, use o botão de avaliação para gerar seu feedback." /> : <div className="evaluation-grid">{data.evaluations.map((evaluation) => { const conversation = data.conversations.find((item) => item.id === evaluation.conversationId), account = data.accounts.find((item) => item.id === conversation?.accountId); return <article className="evaluation-card" key={evaluation.id}><header><div><p className="eyebrow">CONVERSA ANALISADA</p><h2>{account?.name || "Simulação comercial"}</h2><span>{new Date(evaluation.createdAt).toLocaleDateString("pt-BR")}</span></div><strong>{evaluation.score}<small>/100</small></strong></header><p className="evaluation-summary">{evaluation.summary}</p><div className="evaluation-feedback"><section><h3><i aria-hidden="true">✓</i> Pontos fortes</h3>{(evaluation.strengths || ["Conversa concluída e pronta para revisão."]).map((item) => <p key={item}>{item}</p>)}</section><section><h3><i aria-hidden="true">↗</i> Para melhorar</h3>{(evaluation.improvements || ["Revise a conversa e escolha uma habilidade para praticar."]).map((item) => <p key={item}>{item}</p>)}</section></div><div className="evaluation-next"><span aria-hidden="true">◎</span><div><b>Próximo treino</b><p>{evaluation.nextStep || "Pratique uma nova abordagem aplicando o feedback acima."}</p></div></div><button onClick={() => onOpenConversation(evaluation.conversationId)}>Rever conversa <span aria-hidden="true">↗</span></button></article>; })}</div>}</>;
 }
 
 const stageLabel = (stage: string) => ({ prospecting: "Prospeccao", first_contact: "Primeiro contato", initial_qualification: "Qualificacao inicial", responsible_identification: "Identificacao do responsavel", handoff: "Encaminhamento", discovery: "Descoberta", decision_mapping: "Mapa de decisao", objection_handling: "Objecoes", diagnostic_meeting: "Reuniao diagnostica", proposal: "Proposta", negotiation: "Negociacao", closed_won: "Fechada", closed_lost: "Perdida", no_response: "Sem resposta" }[stage] || stage);

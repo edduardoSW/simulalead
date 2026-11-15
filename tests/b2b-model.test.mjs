@@ -23,12 +23,14 @@ test("models a multi-contact buying committee without exposing unknown contacts"
 });
 
 test("uses Supabase exclusively without a local database fallback", async () => {
-  const [page, repository, workspace] = await Promise.all([
+  const [landingPage, loginPage, repository, workspace] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/entrar/page.tsx", root), "utf8"),
     readFile(new URL("lib/supabase-repository.ts", root), "utf8"),
     readFile(new URL("components/LocalWorkspace.tsx", root), "utf8"),
   ]);
-  assert.match(page, /<SupabaseWorkspace/);
+  assert.match(landingPage, /<ProductLanding/);
+  assert.match(loginPage, /<SupabaseWorkspace/);
   assert.match(repository, /workspace_states/);
   assert.doesNotMatch(workspace, /IndexedDbRepository|sessionStorage|MODO LOCAL|AMBIENTE LOCAL/);
 });

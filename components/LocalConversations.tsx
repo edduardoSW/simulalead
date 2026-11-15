@@ -14,10 +14,11 @@ type Props = {
   onRead: (conversationId: string) => Promise<void>;
   onSend: (id: string, text: string, contactId?: string, sender?: Sender, batchId?: string, requestId?: string) => Promise<void>;
   onConfirmBatch: (conversationId: string, batchId: string) => Promise<void>;
+  onEvaluate: (conversationId: string) => Promise<void>;
   onStartAnother: () => void;
 };
 
-export function LocalConversations({ data, selectedConversationId, activeGenerations, generationErrors, onSelect, onRead, onSend, onConfirmBatch, onStartAnother }: Props) {
+export function LocalConversations({ data, selectedConversationId, activeGenerations, generationErrors, onSelect, onRead, onSend, onConfirmBatch, onEvaluate, onStartAnother }: Props) {
   const valid = data.conversations.filter((conversation) =>
     data.accounts.some((account) => account.id === conversation.accountId) &&
     data.opportunities.some((opportunity) => opportunity.id === conversation.opportunityId || opportunity.accountId === conversation.accountId),
@@ -153,7 +154,7 @@ export function LocalConversations({ data, selectedConversationId, activeGenerat
           />
           <button className="primary" disabled={conversationLocked || !drafts[conversation.id]?.trim()} onClick={sendOne}>Enviar ↑</button>
         </div>
-        {simulationEnded && <div className="simulation-ended"><span><b>Simulacao encerrada</b> O lead encerrou esta negociacao.</span><button onClick={onStartAnother}>Iniciar outra simulacao</button></div>}
+        {simulationEnded && <div className="simulation-ended"><span><b>Simulação encerrada</b> Veja o que funcionou e como melhorar sua próxima abordagem.</span><div><button className="evaluation-button" onClick={() => void onEvaluate(conversation.id)}>Ver avaliação e feedback</button><button onClick={onStartAnother}>Iniciar outra simulação</button></div></div>}
         {currentError && currentBatchId && !hasCurrentResponse && <div className="recoverable-error"><span>{currentError}</span><button disabled={respondingHere} onClick={() => confirm(currentBatchId)}>Tentar novamente</button></div>}
       </section>
       <LeadSidePanel data={data} account={account} conversation={conversation} />

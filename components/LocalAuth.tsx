@@ -70,7 +70,7 @@ export function SupabaseTeamManagement({ organizationId, isAdmin }: { organizati
 
   async function resetPassword(email: string | null) {
     if (!email) { setError("Este usuário não possui e-mail cadastrado."); return; }
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/entrar` });
     if (resetError) setError(resetError.message); else setMessage(`Recuperação de senha enviada para ${email}.`);
   }
 

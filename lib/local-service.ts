@@ -1,6 +1,7 @@
 import { migrateLocalData,newId,type LocalData } from "./local-domain";
 import type { LocalRepository } from "./local-repository";
 import { createItTemplateCatalog } from "./it-template-catalog";
+import { buildConversationEvaluation } from "./conversation-evaluation";
 
 export class LocalApplicationService {
  constructor(private repository:LocalRepository){}
@@ -17,4 +18,5 @@ export class LocalApplicationService {
  addMessage(conversationId:string,message:{sender:"seller"|"contact"|"system";contactId?:string;text:string;batchId?:string;requestId?:string}){return this.change(d=>{const now=new Date().toISOString(),target=d.conversations.find(c=>c.id===conversationId),account=d.accounts.find(a=>a.id===target?.accountId),isLead=message.contactId?.startsWith("lead:")||false,normalized={...message,sender:isLead?"contact" as const:message.sender,contactId:isLead?message.contactId?.slice(5):message.contactId},fromLead=normalized.sender==="contact";return{...d,conversations:d.conversations.map(c=>c.id===conversationId?{...c,updatedAt:now,unread:c.unread+(fromLead?1:0),messages:[...c.messages,{...normalized,id:newId(),status:normalized.sender==="seller"?"sent":"answered",createdAt:now}]}:c),notifications:fromLead?[{id:newId(),title:`Nova resposta de ${account?.name||"um lead"}`,conversationId,read:false,createdAt:now},...d.notifications]:d.notifications,opportunities:d.opportunities.map(o=>target?.opportunityId===o.id?{...o,lastActivity:now,stage:o.stage==="prospecting"?"first_contact":o.stage,status:normalized.sender==="seller"?"waiting":"open"}:o)}})}
  updateBatchStatus(conversationId:string,batchId:string,status:"waiting"|"sent"|"answered"|"failed",requestId?:string){return this.change(d=>{const now=new Date().toISOString();return{...d,conversations:d.conversations.map(c=>c.id===conversationId?{...c,updatedAt:now,messages:c.messages.map(m=>m.batchId===batchId&&m.sender==="seller"?{...m,status,requestId:requestId||m.requestId}:m)}:c)}})}
  markConversationRead(conversationId:string){return this.change(d=>({...d,conversations:d.conversations.map(c=>c.id===conversationId?{...c,unread:0}:c),notifications:d.notifications.map(n=>n.conversationId===conversationId?{...n,read:true}:n)}))}
+ evaluateConversation(conversationId:string){return this.change(d=>{if(d.evaluations.some(e=>e.conversationId===conversationId))return d;const conversation=d.conversations.find(c=>c.id===conversationId);if(!conversation||conversation.status!=="completed")throw new Error("A conversa precisa estar encerrada antes da avaliacao.");return{...d,evaluations:[buildConversationEvaluation(conversation),...d.evaluations]}})}
 }

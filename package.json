@@ -6,7 +6,7 @@
     "dev": "next dev --hostname 127.0.0.1 --webpack",
     "build": "next build",
     "start": "next start",
-    "test": "node --test tests/b2b-model.test.mjs tests/simulation-context.test.mjs tests/supabase-hardening.test.mjs tests/supabase-url.test.mjs",
+    "test": "node --test tests/b2b-model.test.mjs tests/conversation-evaluation.test.mjs tests/simulation-context.test.mjs tests/supabase-hardening.test.mjs tests/supabase-url.test.mjs",
     "benchmark:gemini": "node tests/measure-gemini-context.mjs",
     "lint": "eslint .",
     "check": "npm run lint && npm test && npm run build"

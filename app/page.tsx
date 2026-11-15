@@ -1,5 +1,5 @@
-import { SupabaseWorkspace } from "../components/SupabaseWorkspace";
+import { ProductLanding } from "../components/ProductLanding";
 
 export default function Home() {
-  return <SupabaseWorkspace />;
+  return <ProductLanding />;
 }

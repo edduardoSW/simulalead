@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "simulaLEAD — Treinamento comercial com IA",
-  description: "Pratique conversas comerciais, receba feedback objetivo e acompanhe sua evolução.",
+  title: "simulaLEAD — Treinamento de SDR com IA",
+  description: "Plataforma de simulação comercial para SDRs praticarem conversas, objeções e qualificação com feedback objetivo.",
 };
 
 export default function RootLayout({
