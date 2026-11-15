@@ -10,10 +10,13 @@ export type EvaluationProviderErrorResult = {
   body: { error: string; retryAfterSeconds?: number };
 };
 
+const isCredentialError = (status: number, message: string) => status === 401
+  || /api[_ ]?key[^.\n]*(not valid|invalid|revoked|expired)|invalid[^.\n]*api[_ ]?key|unauthenticated|invalid credential/i.test(message);
+
 export function classifyEvaluationProviderFailure(attempt: EvaluationProviderFailure, model: string): EvaluationProviderErrorResult {
   const dailyQuota = /daily|per.?day|requestsperday|quota_exceeded/i.test(`${attempt.quotaReason || ""} ${attempt.error}`);
+  if (isCredentialError(attempt.status, attempt.error)) return { status: 503, body: { error: `A chave da API de avaliação foi recusada pelo Gemini (${attempt.status}). Verifique se ela está ativa e vinculada ao projeto correto.` } };
   if (attempt.status === 400) return { status: 502, body: { error: "A API Gemini rejeitou a configuração da avaliação (400). Verifique o modelo e os parâmetros configurados." } };
-  if (attempt.status === 401) return { status: 503, body: { error: "A chave da API de avaliação é inválida, foi revogada, está incompleta ou não foi vinculada corretamente ao projeto (401)." } };
   if (attempt.status === 403) return { status: 503, body: { error: "A chave da API de avaliação não tem permissão para usar o Gemini neste projeto (403)." } };
   if (attempt.status === 404) return { status: 503, body: { error: `O modelo de avaliação ${model} não foi encontrado ou não está disponível para esta chave (404).` } };
   if (attempt.status === 429) return { status: 429, body: { error: dailyQuota ? "A cota diária de avaliações do Gemini foi esgotada (429)." : "O limite temporário de avaliações do Gemini foi atingido (429).", retryAfterSeconds: attempt.retryAfterSeconds } };

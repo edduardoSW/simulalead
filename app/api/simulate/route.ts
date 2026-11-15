@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { generateGeminiContent, isGeminiCredentialError, type GeminiAttempt } from "../../../lib/gemini-client";
 import {
   buildOptimizedSimulationInstruction,
   isNaturalReply,
@@ -28,38 +29,6 @@ type ValidatedSimulationRequest = {
 type SimulationResult = {
   status: number;
   body: Record<string, unknown>;
-};
-
-type GeminiPayload = {
-  candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string }> } }>;
-  error?: {
-    code?: number | string;
-    message?: string;
-    status?: string;
-    details?: Array<{
-      reason?: string;
-      metadata?: Record<string, string>;
-      violations?: Array<{ quotaMetric?: string; quotaId?: string }>;
-      retryDelay?: string;
-    }>;
-  };
-  usageMetadata?: {
-    promptTokenCount?: number;
-    candidatesTokenCount?: number;
-    thoughtsTokenCount?: number;
-    cachedContentTokenCount?: number;
-    totalTokenCount?: number;
-  };
-};
-
-type GeminiAttempt = {
-  ok: boolean;
-  status: number;
-  data: GeminiPayload | null;
-  errorMessage: string;
-  retryAfterSeconds?: number;
-  durationMs: number;
-  timedOut?: boolean;
 };
 
 type ProviderAttemptMetric = {
@@ -132,7 +101,7 @@ function configuredGeminiTimeoutMs() {
 }
 
 function configuredGeminiModel() {
-  return process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash-lite";
+  return process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
 }
 
 function configuredPositiveInteger(name: string, fallback: number, maximum: number) {
@@ -143,17 +112,6 @@ function configuredPositiveInteger(name: string, fallback: number, maximum: numb
 function configuredThinkingLevel() {
   const configured = process.env.GEMINI_THINKING_LEVEL?.trim().toLowerCase();
   return configured && ["minimal", "low", "medium", "high"].includes(configured) ? configured : "minimal";
-}
-
-function parseRetryAfterSeconds(headerValue: string | null, message = "") {
-  if (headerValue) {
-    const seconds = Number(headerValue);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds);
-    const dateValue = new Date(headerValue).getTime();
-    if (!Number.isNaN(dateValue)) return Math.max(0, Math.ceil((dateValue - Date.now()) / 1000));
-  }
-  const match = message.match(/retry in\s+([0-9]+(?:\.[0-9]+)?)s/i);
-  return match ? Math.ceil(Number(match[1])) : undefined;
 }
 
 function shortProviderMessage(message: string) {
@@ -195,8 +153,11 @@ function isDailyOrBillingQuota(reason: string | null, message: string) {
 
 function userFacingGeminiError(status: number, providerMessage: string, model: string, retryAfterSeconds?: number, quotaReason: string | null = null) {
   const message = providerMessage.toLowerCase();
-  if (status === 401 || status === 403) {
-    return technicalResult("A chave do Gemini foi recusada. Verifique GEMINI_API_KEY e permissoes do projeto.", status, false, { providerStatus: status, model });
+  if (isGeminiCredentialError(status, providerMessage)) {
+    return technicalResult(`A chave da API de simulacao foi recusada pelo Gemini (${status}). Verifique GEMINI_API_KEY e o projeto vinculado.`, 503, false, { providerStatus: status, model });
+  }
+  if (status === 403) {
+    return technicalResult("A chave da API de simulacao nao tem permissao para usar o Gemini neste projeto (403).", 503, false, { providerStatus: status, model });
   }
   if (status === 400 || status === 404) {
     return technicalResult(`O Gemini recusou a configuracao da simulacao para o modelo ${model}. Verifique GEMINI_MODEL e o payload enviado.`, 502, false, { providerStatus: status, model });
@@ -219,56 +180,6 @@ function userFacingGeminiError(status: number, providerMessage: string, model: s
     return technicalResult("O Gemini interrompeu a resposta por limite de tokens. Tente novamente para gerar uma resposta completa.", 502, true, { providerStatus: status, model });
   }
   return technicalResult("Nao foi possivel gerar a resposta do lead agora. Tente novamente.", temporaryFailureStatus.has(status) ? 503 : 502, true, { providerStatus: status, model });
-}
-
-async function callGemini(model: string, apiKey: string, body: string, timeoutMs: number): Promise<GeminiAttempt> {
-  const startedAt = Date.now();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body,
-      signal: controller.signal,
-    });
-    const raw = await response.text();
-    let data: GeminiPayload | null = null;
-    try {
-      data = raw ? JSON.parse(raw) as GeminiPayload : null;
-    } catch {
-      return {
-        ok: false,
-        status: response.status || 502,
-        data: null,
-        errorMessage: raw ? `Resposta nao JSON do Gemini: ${raw.slice(0, 200)}` : "Resposta vazia do Gemini.",
-        durationMs: Date.now() - startedAt,
-      };
-    }
-    const errorMessage = data?.error?.message || "";
-    const detailRetryDelay = data?.error?.details?.map((detail) => detail.retryDelay).find(Boolean);
-    const detailRetrySeconds = detailRetryDelay?.match(/^([0-9]+(?:\.[0-9]+)?)s$/)?.[1];
-    return {
-      ok: response.ok,
-      status: response.status,
-      data,
-      errorMessage,
-      retryAfterSeconds: parseRetryAfterSeconds(response.headers.get("retry-after"), errorMessage) || (detailRetrySeconds ? Math.ceil(Number(detailRetrySeconds)) : undefined),
-      durationMs: Date.now() - startedAt,
-    };
-  } catch (error) {
-    const timedOut = error instanceof DOMException && error.name === "AbortError";
-    return {
-      ok: false,
-      status: timedOut ? 504 : 502,
-      data: null,
-      errorMessage: timedOut ? `Timeout ao chamar Gemini apos ${timeoutMs}ms.` : error instanceof Error ? error.message : "Falha de rede ao chamar Gemini.",
-      durationMs: Date.now() - startedAt,
-      timedOut,
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 async function authenticate(request: Request): Promise<AuthenticatedRequest | SimulationResult> {
@@ -593,7 +504,7 @@ async function generateSimulationResult(
   let retryDelayMs = 1_200;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-    const gemini = await callGemini(model, apiKey, geminiBody, timeoutMs);
+    const gemini = await generateGeminiContent({ model, apiKey, body: geminiBody, timeoutMs });
     lastStatus = gemini.status;
     lastError = gemini.errorMessage || "";
     const finishReason = gemini.data?.candidates?.[0]?.finishReason || "";

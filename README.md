@@ -19,7 +19,7 @@ Preencha `.env.local` com as credenciais do seu ambiente. Esse arquivo é ignora
 | Variável | Visibilidade | Finalidade |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | Somente servidor | Chave usada exclusivamente nas simulações. Nunca use prefixo `NEXT_PUBLIC_`. |
-| `GEMINI_MODEL` | Somente servidor | Modelo das simulações; padrão: `gemini-2.5-flash-lite`. |
+| `GEMINI_MODEL` | Somente servidor | Modelo das simulações; padrão: `gemini-3.5-flash-lite`. |
 | `GEMINI_TIMEOUT_MS` | Somente servidor | Timeout por tentativa, em milissegundos. |
 | `GEMINI_MAX_OUTPUT_TOKENS` | Somente servidor | Teto de saída por resposta; padrão econômico: `180`. |
 | `GEMINI_THINKING_LEVEL` | Somente servidor | Nível de raciocínio para Gemini 3; padrão: `minimal`. |

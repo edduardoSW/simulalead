@@ -5,6 +5,7 @@ import {
   evaluationResponseSchema,
   parseEvaluationResponse,
 } from "../lib/gemini-evaluation.ts";
+import { generateGeminiContent } from "../lib/gemini-client.ts";
 
 async function loadLocalEnvironment() {
   const source = await readFile(new URL("../.env.local", import.meta.url), "utf8");
@@ -45,10 +46,11 @@ const prompt = buildEvaluationPrompt(
 );
 
 const startedAt = Date.now();
-const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-  method: "POST",
-  headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-  body: JSON.stringify({
+const attempt = await generateGeminiContent({
+  apiKey,
+  model,
+  timeoutMs: 35_000,
+  body: {
     systemInstruction: { parts: [{ text: "Voce e um avaliador de treinamento comercial B2B. Responda somente com o JSON solicitado, sem markdown." }] },
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: {
@@ -57,19 +59,18 @@ const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/m
       responseSchema: evaluationResponseSchema,
       thinkingConfig: { thinkingLevel: "minimal" },
     },
-  }),
+  },
 });
 
-const payload = await response.json();
-if (!response.ok) {
-  throw new Error(`Gemini respondeu HTTP ${response.status}: ${payload?.error?.status || "erro sem codigo"}`);
+if (!attempt.ok) {
+  throw new Error(`Gemini respondeu HTTP ${attempt.status}: ${attempt.data?.error?.status || "erro sem codigo"}`);
 }
 
-const raw = payload?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
+const raw = attempt.data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
 const evaluation = parseEvaluationResponse(raw, conversation.id, model);
 console.log(JSON.stringify({
   ok: true,
-  providerStatus: response.status,
+  providerStatus: attempt.status,
   model: evaluation.model,
   score: evaluation.score,
   criteria: evaluation.criteria,
@@ -78,8 +79,8 @@ console.log(JSON.stringify({
   recommendations: evaluation.recommendations.length,
   hasSummary: evaluation.summary.length > 0,
   hasNextStep: evaluation.nextStep.length > 0,
-  promptTokens: payload?.usageMetadata?.promptTokenCount || 0,
-  outputTokens: payload?.usageMetadata?.candidatesTokenCount || 0,
-  totalTokens: payload?.usageMetadata?.totalTokenCount || 0,
+  promptTokens: attempt.data?.usageMetadata?.promptTokenCount || 0,
+  outputTokens: attempt.data?.usageMetadata?.candidatesTokenCount || 0,
+  totalTokens: attempt.data?.usageMetadata?.totalTokenCount || 0,
   durationMs: Date.now() - startedAt,
 }, null, 2));

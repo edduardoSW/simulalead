@@ -51,6 +51,38 @@ test("uses named constraints and distinct PL/pgSQL variables for conversation up
   assert.doesNotMatch(migration, /on conflict \([^)]*conversation_id/);
 });
 
+test("reconciles Gemini evaluation usage without rewriting applied migration history", async () => {
+  const migration = await readFile(
+    new URL("supabase/migrations/202611150003_reconcile_gemini_usage_schema.sql", root),
+    "utf8",
+  );
+  assert.match(migration, /alter table public\.gemini_usage_events/);
+  assert.match(migration, /add column if not exists operation_kind/);
+  assert.match(migration, /create or replace function public\.record_gemini_evaluation_usage\(/);
+  assert.match(migration, /#variable_conflict error/);
+  assert.match(migration, /e\.conversation_id/);
+  assert.match(migration, /grant execute[^]*to service_role/);
+  assert.match(migration, /with \(security_invoker = true\)/);
+  assert.match(migration, /drop view if exists public\.gemini_usage_by_user/);
+  assert.doesNotMatch(migration, /drop (table|function)/i);
+});
+
+test("moves seller evaluations out of the organization-wide workspace payload", async () => {
+  const [migration, repository, route] = await Promise.all([
+    readFile(new URL("supabase/migrations/202611150004_isolate_seller_evaluations.sql", root), "utf8"),
+    readFile(new URL("lib/supabase-repository.ts", root), "utf8"),
+    readFile(new URL("app/api/evaluate/route.ts", root), "utf8"),
+  ]);
+  assert.match(migration, /insert into public\.user_simulations as simulation/);
+  assert.match(migration, /jsonb_set\(s\.payload, '\{evaluation\}'/);
+  assert.match(migration, /evaluation\.value->>'conversationId' = s\.conversation_id/);
+  assert.match(migration, /s\.conversation_id = legacy\.value->>'id'/);
+  assert.match(repository, /const \{ conversations: _conversations, evaluations: _evaluations/);
+  assert.match(repository, /return evaluation \? \{ \.\.\.owned, evaluation \} : owned/);
+  assert.match(repository, /ownedConversationIds\.has\(evaluation\.conversationId\)/);
+  assert.match(route, /simulationPayload\.evaluation/);
+});
+
 test("creates team members only through an authenticated server route with rollback", async () => {
   const [route, serverClient, component] = await Promise.all([
     readFile(new URL("app/api/team-members/route.ts", root), "utf8"),

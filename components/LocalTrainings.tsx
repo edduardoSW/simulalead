@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { LocalScenario } from "../lib/local-domain";
+import { supabase } from "../lib/supabase-client";
 
 type Message = { from: "seller" | "lead"; text: string };
 type SimulationResult = { text?: string; error?: string; conversationId?: string };
@@ -116,14 +117,15 @@ export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
     setWaiting(true);
 
     try {
-      const response = await fetch("/api/simulate", {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error("Sua sessão expirou. Entre novamente para continuar.");
+      const response = await fetch("/api/training", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
         body: JSON.stringify({
-          leadId: selected.id,
           conversationId: requestSession,
           requestId,
-          scenario: { title: selected.title, desc: selected.objective },
           lead: {
             name: lead?.name || "Contato do treinamento",
             role: lead?.jobTitle || "Gestor da área",

@@ -5,6 +5,7 @@ import { createItTemplateCatalog } from "./it-template-catalog";
 
 export class SupabaseRepository implements LocalRepository {
   private legacyConversations: Array<Record<string, unknown>> = [];
+  private legacyEvaluations: LocalData["evaluations"] = [];
   private legacyOwnerId = "";
   private workspaceVersion = 0;
   private conversationVersions = new Map<string, number>();
@@ -62,37 +63,65 @@ export class SupabaseRepository implements LocalRepository {
     this.legacyConversations = Array.isArray(workspacePayload.conversations)
       ? workspacePayload.conversations as Array<Record<string, unknown>>
       : [];
-    const persistedConversations: Array<Record<string, unknown> & { sellerId: string }> = (simulations || []).map((item) => ({
-        ...(item.payload as Record<string, unknown>),
-        sellerId: this.userId,
-      }));
+    this.legacyEvaluations = Array.isArray(workspacePayload.evaluations)
+      ? workspacePayload.evaluations as LocalData["evaluations"]
+      : [];
+    const persistedEvaluations: LocalData["evaluations"] = [];
+    const persistedConversations: Array<Record<string, unknown> & { sellerId: string }> = (simulations || []).map((item) => {
+      const payload = item.payload as Record<string, unknown>;
+      const evaluation = payload.evaluation as LocalData["evaluations"][number] | undefined;
+      if (evaluation && evaluation.conversationId === item.conversation_id) persistedEvaluations.push(evaluation);
+      const { evaluation: _evaluation, ...conversation } = payload;
+      void _evaluation;
+      return { ...conversation, sellerId: this.userId };
+    });
     const persistedIds = new Set(persistedConversations.map((conversation) => String(conversation.id || "")));
-    const compatibleLegacyConversations = this.legacyConversations
+    const compatibleLegacyConversations: Array<Record<string, unknown> & { sellerId: string }> = this.legacyConversations
       .filter((conversation) => {
         const sellerId = String(conversation.sellerId || "");
         return sellerId === this.userId || (!sellerId && data.updated_by === this.userId);
       })
       .filter((conversation) => !persistedIds.has(String(conversation.id || "")))
       .map((conversation) => ({ ...conversation, sellerId: this.userId }));
+    const ownedConversationIds = new Set([
+      ...persistedConversations.map((conversation) => String(conversation.id || "")),
+      ...compatibleLegacyConversations.map((conversation) => String(conversation.id || "")),
+    ]);
+    const embeddedEvaluationIds = new Set(persistedEvaluations.map((evaluation) => evaluation.conversationId));
+    const compatibleLegacyEvaluations = this.legacyEvaluations.filter((evaluation) =>
+      ownedConversationIds.has(evaluation.conversationId) && !embeddedEvaluationIds.has(evaluation.conversationId));
     return migrateLocalData({
       ...workspacePayload,
       conversations: [...persistedConversations, ...compatibleLegacyConversations],
+      evaluations: [...persistedEvaluations, ...compatibleLegacyEvaluations],
     });
   }
 
   async save(data: LocalData) {
+    const evaluationByConversation = new Map(data.evaluations.map((evaluation) => [evaluation.conversationId, evaluation]));
     const ownedConversations = data.conversations
       .filter((conversation) => !conversation.sellerId || conversation.sellerId === this.userId)
-      .map((conversation) => ({ ...conversation, sellerId: this.userId }));
-    const { conversations: _conversations, ...sharedWorkspacePayload } = data;
+      .map((conversation) => {
+        const owned = { ...conversation, sellerId: this.userId };
+        const evaluation = evaluationByConversation.get(conversation.id);
+        return evaluation ? { ...owned, evaluation } : owned;
+      });
+    const { conversations: _conversations, evaluations: _evaluations, ...sharedWorkspacePayload } = data;
     void _conversations;
+    void _evaluations;
     const preservedLegacyConversations = this.legacyConversations
       .map((conversation) => ({
         ...conversation,
         sellerId: String(conversation.sellerId || this.legacyOwnerId),
       }))
       .filter((conversation) => conversation.sellerId && conversation.sellerId !== this.userId);
-    const workspacePayload = { ...sharedWorkspacePayload, conversations: preservedLegacyConversations };
+    const ownedConversationIds = new Set(ownedConversations.map((conversation) => conversation.id));
+    const preservedLegacyEvaluations = this.legacyEvaluations.filter((evaluation) => !ownedConversationIds.has(evaluation.conversationId));
+    const workspacePayload = {
+      ...sharedWorkspacePayload,
+      conversations: preservedLegacyConversations,
+      evaluations: preservedLegacyEvaluations,
+    };
 
     const { data: saved, error } = await supabase.rpc("save_workspace_and_simulations", {
       requested_workspace_payload: workspacePayload,

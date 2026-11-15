@@ -1,4 +1,5 @@
 import { buildEvaluationPrompt, evaluationResponseSchema, parseEvaluationResponse } from "../../../lib/gemini-evaluation";
+import { generateGeminiContent, type GeminiAttempt } from "../../../lib/gemini-client";
 import { classifyEvaluationProviderFailure } from "../../../lib/gemini-evaluation-error";
 import { migrateLocalData, type LocalEvaluation } from "../../../lib/local-domain";
 import { createAdminSupabase, createAuthenticatedSupabase } from "../../../lib/supabase-server";
@@ -9,12 +10,6 @@ export const maxDuration = 60;
 
 type EvaluationRequest = { conversationId?: string; requestId?: string };
 type UsageLimitRow = { allowed?: boolean; limit_reason?: string | null; retry_after_seconds?: number };
-type GeminiPayload = {
-  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  error?: { code?: number; status?: string; message?: string; details?: Array<{ reason?: string; retryDelay?: string; violations?: Array<{ quotaId?: string; quotaMetric?: string }> }> };
-  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number; totalTokenCount?: number };
-};
-type ProviderAttempt = { status: number; ok: boolean; data: GeminiPayload | null; error: string; retryAfterSeconds?: number; durationMs: number };
 type EvaluationResult = { status: number; body: { evaluation?: LocalEvaluation; error?: string; retryAfterSeconds?: number } };
 
 const evaluationsInFlight = new Map<string, Promise<EvaluationResult>>();
@@ -28,62 +23,31 @@ const evaluationModel = () => process.env.GEMINI_EVALUATION_MODEL?.trim() || "ge
 const validId = (value: unknown): value is string => typeof value === "string" && value.length <= 160 && /^[A-Za-z0-9:_-]+$/.test(value);
 const response = (result: EvaluationResult) => Response.json(result.body, { status: result.status });
 
-function retryAfterSeconds(value: string | null, message = "") {
-  if (value) {
-    const seconds = Number(value);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds);
-  }
-  const match = message.match(/retry in\s+([0-9]+(?:\.[0-9]+)?)s/i);
-  return match ? Math.ceil(Number(match[1])) : undefined;
-}
-
-function quotaReason(attempt: ProviderAttempt) {
+function quotaReason(attempt: GeminiAttempt) {
   const detail = attempt.data?.error?.details?.[0];
   const violation = detail?.violations?.[0];
   return detail?.reason || violation?.quotaId || violation?.quotaMetric || (attempt.status === 429 ? "RATE_OR_QUOTA_EXHAUSTED" : null);
 }
 
-async function callGemini(apiKey: string, model: string, prompt: string): Promise<ProviderAttempt> {
-  const started = Date.now();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 35_000);
-  try {
-    const provider = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-      signal: controller.signal,
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: "Voce e um avaliador de treinamento comercial B2B. Responda somente com o JSON solicitado, sem markdown." }] },
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          maxOutputTokens: configuredInteger("GEMINI_EVALUATION_MAX_OUTPUT_TOKENS", 900, 1_600),
-          responseMimeType: "application/json",
-          responseSchema: evaluationResponseSchema,
-          thinkingConfig: { thinkingLevel: "minimal" },
-        },
-      }),
-    });
-    const raw = await provider.text();
-    let data: GeminiPayload | null = null;
-    try { data = raw ? JSON.parse(raw) as GeminiPayload : null; } catch { /* handled below */ }
-    const message = data?.error?.message || (data ? "" : "Resposta inválida do provedor.");
-    const detailDelay = data?.error?.details?.map((detail) => detail.retryDelay).find(Boolean);
-    return {
-      status: provider.status,
-      ok: provider.ok,
-      data,
-      error: message,
-      retryAfterSeconds: retryAfterSeconds(provider.headers.get("retry-after"), message) || (detailDelay ? Math.ceil(Number(detailDelay.replace(/s$/, ""))) : undefined),
-      durationMs: Date.now() - started,
-    };
-  } catch (error) {
-    return { status: error instanceof DOMException && error.name === "AbortError" ? 504 : 502, ok: false, data: null, error: "Falha temporária ao avaliar.", durationMs: Date.now() - started };
-  } finally {
-    clearTimeout(timeout);
-  }
+async function callGemini(apiKey: string, model: string, prompt: string): Promise<GeminiAttempt> {
+  return generateGeminiContent({
+    apiKey,
+    model,
+    timeoutMs: 35_000,
+    body: {
+      systemInstruction: { parts: [{ text: "Voce e um avaliador de treinamento comercial B2B. Responda somente com o JSON solicitado, sem markdown." }] },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        maxOutputTokens: configuredInteger("GEMINI_EVALUATION_MAX_OUTPUT_TOKENS", 900, 1_600),
+        responseMimeType: "application/json",
+        responseSchema: evaluationResponseSchema,
+        thinkingConfig: { thinkingLevel: "minimal" },
+      },
+    },
+  });
 }
 
-async function recordUsage(userId: string, conversationId: string, requestId: string, model: string, attempt: ProviderAttempt) {
+async function recordUsage(userId: string, conversationId: string, requestId: string, model: string, attempt: GeminiAttempt) {
   const usage = attempt.data?.usageMetadata;
   try {
     await createAdminSupabase().rpc("record_gemini_evaluation_usage", {
@@ -111,13 +75,17 @@ async function evaluate(userId: string, organizationId: string, client: ReturnTy
   if (simulationError || workspaceError) return { status: 503, body: { error: "Não foi possível carregar a conversa para avaliação." } };
   if (!simulation || !workspace) return { status: 404, body: { error: "Conversa não encontrada." } };
 
+  const simulationPayload = simulation.payload as Record<string, unknown>;
   const workspacePayload = workspace.payload as Record<string, unknown>;
-  const existing = Array.isArray(workspacePayload.evaluations)
-    ? (workspacePayload.evaluations as LocalEvaluation[]).find((item) => item.conversationId === conversationId)
-    : undefined;
+  const embeddedEvaluation = simulationPayload.evaluation as LocalEvaluation | undefined;
+  const existing = embeddedEvaluation?.conversationId === conversationId
+    ? embeddedEvaluation
+    : Array.isArray(workspacePayload.evaluations)
+      ? (workspacePayload.evaluations as LocalEvaluation[]).find((item) => item.conversationId === conversationId)
+      : undefined;
   if (existing) return { status: 200, body: { evaluation: existing } };
 
-  const data = migrateLocalData({ ...workspacePayload, conversations: [simulation.payload] });
+  const data = migrateLocalData({ ...workspacePayload, conversations: [simulationPayload] });
   const conversation = data.conversations.find((item) => item.id === conversationId);
   if (!conversation) return { status: 404, body: { error: "Conversa não encontrada." } };
   if (conversation.status !== "completed") return { status: 409, body: { error: "Finalize a simulação antes de solicitar a avaliação." } };
@@ -142,7 +110,12 @@ async function evaluate(userId: string, organizationId: string, client: ReturnTy
   const prompt = buildEvaluationPrompt(conversation, account, product);
   const attempt = await callGemini(apiKey, model, prompt);
   await recordUsage(userId, conversationId, requestId, model, attempt);
-  if (!attempt.ok) return classifyEvaluationProviderFailure({ ...attempt, quotaReason: quotaReason(attempt) }, model);
+  if (!attempt.ok) return classifyEvaluationProviderFailure({
+    status: attempt.status,
+    error: attempt.errorMessage,
+    retryAfterSeconds: attempt.retryAfterSeconds,
+    quotaReason: quotaReason(attempt),
+  }, model);
   const raw = attempt.data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
   try {
     return { status: 200, body: { evaluation: parseEvaluationResponse(raw, conversationId, model) } };

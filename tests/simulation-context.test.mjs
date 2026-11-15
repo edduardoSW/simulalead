@@ -232,7 +232,7 @@ test("limits Gemini consumption and records provider calls and tokens", async ()
     readFile(new URL("../supabase/migrations/202611140002_gemini_efficiency.sql", import.meta.url), "utf8"),
   ]);
   assert.match(route, /GEMINI_MAX_OUTPUT_TOKENS",\s*180/);
-  assert.match(route, /"gemini-2\.5-flash-lite"/);
+  assert.match(route, /"gemini-3\.5-flash-lite"/);
   assert.match(route, /configuredThinkingLevel/);
   assert.match(route, /for \(let attempt = 0; attempt < 2; attempt \+= 1\)/);
   assert.doesNotMatch(route, /const models\s*=/);
@@ -249,9 +249,10 @@ test("limits Gemini consumption and records provider calls and tokens", async ()
 });
 
 test("separates simulation and final evaluation Gemini workloads", async () => {
-  const [simulationRoute, evaluationRoute, migration, envExample] = await Promise.all([
+  const [simulationRoute, evaluationRoute, geminiClient, migration, envExample] = await Promise.all([
     readFile(new URL("../app/api/simulate/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/evaluate/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/gemini-client.ts", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/202611140002_gemini_efficiency.sql", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
   ]);
@@ -259,6 +260,12 @@ test("separates simulation and final evaluation Gemini workloads", async () => {
   assert.doesNotMatch(simulationRoute, /GEMINI_EVALUATION_API_KEY/);
   assert.match(evaluationRoute, /process\.env\.GEMINI_EVALUATION_API_KEY/);
   assert.doesNotMatch(evaluationRoute, /process\.env\.GEMINI_API_KEY\b/);
+  assert.match(simulationRoute, /generateGeminiContent/);
+  assert.match(evaluationRoute, /generateGeminiContent/);
+  assert.doesNotMatch(simulationRoute, /generativelanguage\.googleapis\.com/);
+  assert.doesNotMatch(evaluationRoute, /generativelanguage\.googleapis\.com/);
+  assert.match(geminiClient, /generativelanguage\.googleapis\.com\/v1beta\/models/);
+  assert.match(geminiClient, /"x-goog-api-key": apiKey/);
   assert.match(evaluationRoute, /conversation\.status !== "completed"/);
   assert.match(evaluationRoute, /evaluationsInFlight/);
   assert.match(evaluationRoute, /record_gemini_evaluation_usage/);
@@ -266,8 +273,27 @@ test("separates simulation and final evaluation Gemini workloads", async () => {
   assert.doesNotMatch(evaluationRoute, /thinkingBudget/);
   assert.match(migration, /operation_kind text not null default 'simulation'/);
   assert.match(migration, /'evaluation', requested_request_id, 'evaluation'/);
-  assert.match(envExample, /GEMINI_MODEL=gemini-2\.5-flash-lite/);
+  assert.match(envExample, /GEMINI_MODEL=gemini-3\.5-flash-lite/);
   assert.match(envExample, /GEMINI_EVALUATION_MODEL=gemini-3\.5-flash-lite/);
+});
+
+test("keeps independent training authenticated and isolated from persisted lead conversations", async () => {
+  const [component, route, migration] = await Promise.all([
+    readFile(new URL("../components/LocalTrainings.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/training/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/202611150002_independent_training_usage.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(component, /fetch\("\/api\/training"/);
+  assert.match(component, /authorization: `Bearer \$\{accessToken\}`/);
+  assert.doesNotMatch(component, /fetch\("\/api\/simulate"/);
+  assert.match(route, /process\.env\.GEMINI_API_KEY/);
+  assert.doesNotMatch(route, /GEMINI_EVALUATION_API_KEY/);
+  assert.match(route, /check_gemini_usage_limit/);
+  assert.match(route, /record_independent_training_usage/);
+  assert.match(route, /requestsInFlight/);
+  assert.doesNotMatch(route, /user_simulations/);
+  assert.match(migration, /operation_kind[^\n]*'simulation'/);
+  assert.match(migration, /grant execute[^\n]*to service_role/);
 });
 
 test("classifies evaluation provider failures without retrying or masking credential errors", async () => {

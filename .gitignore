@@ -24,6 +24,7 @@ output/
 
 # Previous nested workspace kept only as a local backup
 /web/
+/simulalead-main/
 
 # Supabase CLI local state
 supabase/.temp/

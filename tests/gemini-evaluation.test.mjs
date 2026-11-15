@@ -83,9 +83,10 @@ test("rejects incomplete provider output before it can be persisted", () => {
 test("maps Gemini provider errors to specific evaluation messages", () => {
   const model = "gemini-2.5-flash-lite";
   assert.match(classifyEvaluationProviderFailure({ status: 400, error: "invalid" }, model).body.error, /configuração.*400/i);
-  assert.match(classifyEvaluationProviderFailure({ status: 401, error: "unauthenticated" }, model).body.error, /chave.*inválida.*401/i);
+  assert.match(classifyEvaluationProviderFailure({ status: 401, error: "unauthenticated" }, model).body.error, /chave.*recusada.*401/i);
   assert.match(classifyEvaluationProviderFailure({ status: 403, error: "forbidden" }, model).body.error, /permissão.*403/i);
   assert.match(classifyEvaluationProviderFailure({ status: 404, error: "not found" }, model).body.error, /gemini-2\.5-flash-lite.*404/i);
   assert.match(classifyEvaluationProviderFailure({ status: 429, error: "quota", quotaReason: "requestsPerDay" }, model).body.error, /cota diária.*429/i);
+  assert.match(classifyEvaluationProviderFailure({ status: 400, error: "API key not valid. Please pass a valid API key." }, model).body.error, /chave.*recusada.*400/i);
   assert.match(classifyEvaluationProviderFailure({ status: 500, error: "internal" }, model).body.error, /erro interno.*500/i);
 });
