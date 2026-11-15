@@ -29,11 +29,22 @@ export const evaluationResponseSchema = {
 } as const;
 
 export function buildEvaluationPrompt(conversation: LocalConversation, account?: LocalAccount, product?: LocalProduct) {
-  const transcript = conversation.messages
+  const transcriptLines = conversation.messages
     .filter((message) => message.sender !== "system")
-    .slice(-60)
-    .map((message) => `${message.sender === "seller" ? "VENDEDOR" : "CLIENTE"}: ${message.text.replace(/\s+/g, " ").trim().slice(0, 420)}`)
-    .join("\n");
+    .map((message) => `${message.sender === "seller" ? "VENDEDOR" : "CLIENTE"}: ${message.text.replace(/\s+/g, " ").trim().slice(0, 4_000)}`);
+  const maxTranscriptCharacters = 120_000;
+  let transcript = transcriptLines.join("\n");
+  if (transcript.length > maxTranscriptCharacters) {
+    const retained: string[] = [];
+    let retainedLength = 0;
+    for (let index = transcriptLines.length - 1; index >= 0; index -= 1) {
+      const line = transcriptLines[index];
+      if (retainedLength + line.length + 1 > maxTranscriptCharacters) break;
+      retained.unshift(line);
+      retainedLength += line.length + 1;
+    }
+    transcript = `[Trecho inicial omitido por limite de contexto; ${transcriptLines.length - retained.length} mensagens anteriores.]\n${retained.join("\n")}`;
+  }
   return `Avalie esta simulacao de venda B2B em portugues do Brasil.
 Contexto: empresa ${account?.name || "nao informada"}; segmento ${account?.segment || "nao informado"}; solucao relacionada ${product?.name || "nao informada"}.
 Regras: avalie apenas comportamentos observaveis do vendedor; nao penalize ausencia de objecao, decisor, fechamento ou informacao que o cliente nao ofereceu; diferencie falha do vendedor de situacao fora do controle dele; use notas inteiras de 0 a 10 por criterio; seja direto, pratico e respeitoso; nao invente falas.
@@ -51,25 +62,38 @@ type RawEvaluation = {
   nextStep?: unknown;
 };
 
-const score = (value: unknown) => Math.max(0, Math.min(10, Math.round(Number(value) || 0)));
-const text = (value: unknown, fallback: string) => typeof value === "string" && value.trim() ? value.trim().slice(0, 700) : fallback;
-const list = (value: unknown, fallback: string) => Array.isArray(value)
-  ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 3).map((item) => item.trim().slice(0, 320))
-  : [fallback];
+const score = (value: number) => Math.max(0, Math.min(10, Math.round(value)));
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const requiredText = (value: unknown, field: string) => {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`Invalid evaluation field: ${field}`);
+  return value.trim().slice(0, 700);
+};
+const requiredList = (value: unknown, field: string) => {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 3 || value.some((item) => typeof item !== "string" || !item.trim())) {
+    throw new Error(`Invalid evaluation field: ${field}`);
+  }
+  return value.map((item) => (item as string).trim().slice(0, 320));
+};
 
 export function parseEvaluationResponse(raw: string, conversationId: string, model: string): LocalEvaluation {
   const parsed = JSON.parse(raw) as RawEvaluation;
-  const criteria = Object.fromEntries(Object.keys(evaluationCriteriaLabels).map((key) => [key, score(parsed.criteria?.[key])])) as LocalEvaluation["criteria"];
+  if (!isRecord(parsed) || !isRecord(parsed.criteria)) throw new Error("Invalid evaluation structure");
+  const criteria = Object.fromEntries(Object.keys(evaluationCriteriaLabels).map((key) => {
+    const value = parsed.criteria?.[key];
+    if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Invalid evaluation criterion: ${key}`);
+    return [key, score(value)];
+  })) as LocalEvaluation["criteria"];
+  if (typeof parsed.overallScore !== "number" || !Number.isFinite(parsed.overallScore)) throw new Error("Invalid evaluation score");
   return {
     id: crypto.randomUUID(),
     conversationId,
-    score: Math.round(Math.max(0, Math.min(10, Number(parsed.overallScore) || 0)) * 10),
-    summary: text(parsed.summary, "Avaliação concluída com base na conversa disponível."),
+    score: Math.round(Math.max(0, Math.min(10, parsed.overallScore)) * 10),
+    summary: requiredText(parsed.summary, "summary"),
     criteria,
-    strengths: list(parsed.strengths, "A conversa foi concluída e pode ser revisada."),
-    improvements: list(parsed.improvements, "Continue praticando perguntas de descoberta."),
-    recommendations: list(parsed.recommendations, "Aplique uma melhoria por vez na próxima simulação."),
-    nextStep: text(parsed.nextStep, "Pratique novamente aplicando o feedback desta avaliação."),
+    strengths: requiredList(parsed.strengths, "strengths"),
+    improvements: requiredList(parsed.improvements, "improvements"),
+    recommendations: requiredList(parsed.recommendations, "recommendations"),
+    nextStep: requiredText(parsed.nextStep, "nextStep"),
     model,
     createdAt: new Date().toISOString(),
   };

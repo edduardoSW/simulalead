@@ -1,4 +1,5 @@
 import { buildEvaluationPrompt, evaluationResponseSchema, parseEvaluationResponse } from "../../../lib/gemini-evaluation";
+import { classifyEvaluationProviderFailure } from "../../../lib/gemini-evaluation-error";
 import { migrateLocalData, type LocalEvaluation } from "../../../lib/local-domain";
 import { createAdminSupabase, createAuthenticatedSupabase } from "../../../lib/supabase-server";
 
@@ -10,7 +11,7 @@ type EvaluationRequest = { conversationId?: string; requestId?: string };
 type UsageLimitRow = { allowed?: boolean; limit_reason?: string | null; retry_after_seconds?: number };
 type GeminiPayload = {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  error?: { message?: string; details?: Array<{ reason?: string; retryDelay?: string; violations?: Array<{ quotaId?: string; quotaMetric?: string }> }> };
+  error?: { code?: number; status?: string; message?: string; details?: Array<{ reason?: string; retryDelay?: string; violations?: Array<{ quotaId?: string; quotaMetric?: string }> }> };
   usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number; totalTokenCount?: number };
 };
 type ProviderAttempt = { status: number; ok: boolean; data: GeminiPayload | null; error: string; retryAfterSeconds?: number; durationMs: number };
@@ -23,7 +24,7 @@ const configuredInteger = (name: string, fallback: number, maximum: number) => {
   const value = Number(process.env[name] || "");
   return Number.isInteger(value) && value > 0 && value <= maximum ? value : fallback;
 };
-const evaluationModel = () => process.env.GEMINI_EVALUATION_MODEL?.trim() || "gemini-2.5-flash";
+const evaluationModel = () => process.env.GEMINI_EVALUATION_MODEL?.trim() || "gemini-3.5-flash-lite";
 const validId = (value: unknown): value is string => typeof value === "string" && value.length <= 160 && /^[A-Za-z0-9:_-]+$/.test(value);
 const response = (result: EvaluationResult) => Response.json(result.body, { status: result.status });
 
@@ -55,11 +56,10 @@ async function callGemini(apiKey: string, model: string, prompt: string): Promis
         systemInstruction: { parts: [{ text: "Voce e um avaliador de treinamento comercial B2B. Responda somente com o JSON solicitado, sem markdown." }] },
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: {
-          temperature: 0.2,
           maxOutputTokens: configuredInteger("GEMINI_EVALUATION_MAX_OUTPUT_TOKENS", 900, 1_600),
           responseMimeType: "application/json",
           responseSchema: evaluationResponseSchema,
-          thinkingConfig: { thinkingBudget: 0 },
+          thinkingConfig: { thinkingLevel: "minimal" },
         },
       }),
     });
@@ -140,23 +140,9 @@ async function evaluate(userId: string, organizationId: string, client: ReturnTy
   if (limit?.allowed === false) return { status: 429, body: { error: "Limite de avaliações atingido. Tente novamente mais tarde.", retryAfterSeconds: Number(limit.retry_after_seconds || 0) } };
 
   const prompt = buildEvaluationPrompt(conversation, account, product);
-  let attempt = await callGemini(apiKey, model, prompt);
+  const attempt = await callGemini(apiKey, model, prompt);
   await recordUsage(userId, conversationId, requestId, model, attempt);
-  const reason = quotaReason(attempt) || "";
-  const dailyQuota = /daily|per.?day|requestsperday|quota_exceeded/i.test(`${reason} ${attempt.error}`);
-  if (attempt.status === 429 && !dailyQuota && attempt.retryAfterSeconds && attempt.retryAfterSeconds <= 10) {
-    await new Promise((resolve) => setTimeout(resolve, attempt.retryAfterSeconds! * 1_000));
-    attempt = await callGemini(apiKey, model, prompt);
-    await recordUsage(userId, conversationId, requestId, model, attempt);
-  }
-  if (!attempt.ok) {
-    const finalReason = quotaReason(attempt) || "";
-    const finalDailyQuota = /daily|per.?day|requestsperday|quota_exceeded/i.test(`${finalReason} ${attempt.error}`);
-    if (attempt.status === 429) return { status: 429, body: { error: finalDailyQuota ? "Cota diária de avaliações esgotada." : "Limite temporário de avaliações atingido.", retryAfterSeconds: attempt.retryAfterSeconds } };
-    if ([401, 403].includes(attempt.status)) return { status: 503, body: { error: "A chave da API de avaliação foi recusada." } };
-    if (attempt.status === 404) return { status: 503, body: { error: `O modelo de avaliação ${model} não está disponível neste projeto.` } };
-    return { status: 503, body: { error: "Não foi possível gerar a avaliação agora." } };
-  }
+  if (!attempt.ok) return classifyEvaluationProviderFailure({ ...attempt, quotaReason: quotaReason(attempt) }, model);
   const raw = attempt.data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
   try {
     return { status: 200, body: { evaluation: parseEvaluationResponse(raw, conversationId, model) } };

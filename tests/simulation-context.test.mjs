@@ -262,11 +262,20 @@ test("separates simulation and final evaluation Gemini workloads", async () => {
   assert.match(evaluationRoute, /conversation\.status !== "completed"/);
   assert.match(evaluationRoute, /evaluationsInFlight/);
   assert.match(evaluationRoute, /record_gemini_evaluation_usage/);
-  assert.match(evaluationRoute, /thinkingBudget:\s*0/);
+  assert.match(evaluationRoute, /thinkingLevel:\s*"minimal"/);
+  assert.doesNotMatch(evaluationRoute, /thinkingBudget/);
   assert.match(migration, /operation_kind text not null default 'simulation'/);
   assert.match(migration, /'evaluation', requested_request_id, 'evaluation'/);
   assert.match(envExample, /GEMINI_MODEL=gemini-2\.5-flash-lite/);
-  assert.match(envExample, /GEMINI_EVALUATION_MODEL=gemini-2\.5-flash/);
+  assert.match(envExample, /GEMINI_EVALUATION_MODEL=gemini-3\.5-flash-lite/);
+});
+
+test("classifies evaluation provider failures without retrying or masking credential errors", async () => {
+  const evaluationRoute = await readFile(new URL("../app/api/evaluate/route.ts", import.meta.url), "utf8");
+  assert.match(evaluationRoute, /"gemini-3\.5-flash-lite"/);
+  assert.match(evaluationRoute, /classifyEvaluationProviderFailure/);
+  assert.doesNotMatch(evaluationRoute, /await new Promise\(\(resolve\) => setTimeout/);
+  assert.equal((evaluationRoute.match(/await callGemini\(/g) || []).length, 1);
 });
 
 test("exposes tenant-scoped Gemini monitoring by user and simulation", async () => {

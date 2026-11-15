@@ -6,6 +6,7 @@ import {
   evaluationResponseSchema,
   parseEvaluationResponse,
 } from "../lib/gemini-evaluation.ts";
+import { classifyEvaluationProviderFailure } from "../lib/gemini-evaluation-error.ts";
 
 const conversation = {
   id: "conversation-evaluation-1",
@@ -55,4 +56,36 @@ test("parses all seven criteria and clamps invalid scores", () => {
 test("requires structured fields for every evaluation criterion", () => {
   assert.deepEqual(evaluationResponseSchema.properties.criteria.required, Object.keys(evaluationCriteriaLabels));
   assert.match(JSON.stringify(evaluationResponseSchema), /overallScore/);
+});
+
+test("keeps the complete conversation when it fits the evaluation context", () => {
+  const longConversation = {
+    ...conversation,
+    messages: Array.from({ length: 75 }, (_, index) => ({
+      id: `message-${index}`,
+      sender: index % 2 === 0 ? "seller" : "contact",
+      text: index === 0 ? "MARCADOR-INICIAL: abertura da conversa." : `Mensagem comercial ${index}.`,
+      createdAt: new Date(2026, 10, 14, 10, index).toISOString(),
+    })),
+  };
+  const prompt = buildEvaluationPrompt(longConversation);
+  assert.match(prompt, /MARCADOR-INICIAL/);
+  assert.match(prompt, /Mensagem comercial 74/);
+});
+
+test("rejects incomplete provider output before it can be persisted", () => {
+  assert.throws(
+    () => parseEvaluationResponse(JSON.stringify({ overallScore: 8, summary: "Incompleta" }), conversation.id, "gemini-2.5-flash-lite"),
+    /Invalid evaluation structure/,
+  );
+});
+
+test("maps Gemini provider errors to specific evaluation messages", () => {
+  const model = "gemini-2.5-flash-lite";
+  assert.match(classifyEvaluationProviderFailure({ status: 400, error: "invalid" }, model).body.error, /configuração.*400/i);
+  assert.match(classifyEvaluationProviderFailure({ status: 401, error: "unauthenticated" }, model).body.error, /chave.*inválida.*401/i);
+  assert.match(classifyEvaluationProviderFailure({ status: 403, error: "forbidden" }, model).body.error, /permissão.*403/i);
+  assert.match(classifyEvaluationProviderFailure({ status: 404, error: "not found" }, model).body.error, /gemini-2\.5-flash-lite.*404/i);
+  assert.match(classifyEvaluationProviderFailure({ status: 429, error: "quota", quotaReason: "requestsPerDay" }, model).body.error, /cota diária.*429/i);
+  assert.match(classifyEvaluationProviderFailure({ status: 500, error: "internal" }, model).body.error, /erro interno.*500/i);
 });

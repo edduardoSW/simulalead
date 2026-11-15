@@ -40,7 +40,7 @@ do $$ begin
     select 1 from information_schema.columns
     where table_schema='public' and table_name='workspace_states' and column_name='version'
   ), 'workspace version column missing';
-  assert to_regprocedure('public.save_workspace_and_simulations(jsonb,jsonb,bigint)') is not null,
+  assert to_regprocedure('public.save_workspace_and_simulations(jsonb,jsonb,jsonb,bigint)') is not null,
     'atomic workspace save function missing';
   assert not has_table_privilege('authenticated','public.workspace_states','INSERT'),
     'authenticated must not write workspace_states directly';

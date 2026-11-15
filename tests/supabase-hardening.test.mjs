@@ -39,6 +39,18 @@ test("qualifies joined usage-view columns to avoid ambiguous SQL references", as
   assert.match(migration, /group by e\.organization_id, e\.seller_id, p\.full_name, e\.operation_kind/);
 });
 
+test("uses named constraints and distinct PL/pgSQL variables for conversation upserts", async () => {
+  const migration = await readFile(new URL("supabase/migrations/202611150001_fix_conversation_id_ambiguity.sql", root), "utf8");
+  assert.match(migration, /create or replace function public\.save_workspace_and_simulations\(/);
+  assert.match(migration, /requested_conversation_versions jsonb/);
+  assert.match(migration, /v_conversation_id text;/);
+  assert.match(migration, /s\.conversation_id = v_conversation_id/);
+  assert.match(migration, /on conflict on constraint user_simulations_pkey do update/);
+  assert.match(migration, /on conflict on constraint simulation_generations_pkey do update/);
+  assert.equal((migration.match(/#variable_conflict error/g) || []).length, 2);
+  assert.doesNotMatch(migration, /on conflict \([^)]*conversation_id/);
+});
+
 test("creates team members only through an authenticated server route with rollback", async () => {
   const [route, serverClient, component] = await Promise.all([
     readFile(new URL("app/api/team-members/route.ts", root), "utf8"),

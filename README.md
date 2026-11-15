@@ -27,7 +27,7 @@ Preencha `.env.local` com as credenciais do seu ambiente. Esse arquivo é ignora
 | `GEMINI_USER_DAILY_REQUEST_LIMIT` | Somente servidor | Limite diário de chamadas por usuário; padrão: `50`. |
 | `GEMINI_USER_DAILY_TOKEN_LIMIT` | Somente servidor | Limite diário de tokens por usuário; padrão: `200000`. |
 | `GEMINI_EVALUATION_API_KEY` | Somente servidor | Chave exclusiva da avaliação final. Não é fallback da simulação. |
-| `GEMINI_EVALUATION_MODEL` | Somente servidor | Modelo das avaliações; padrão: `gemini-2.5-flash`. |
+| `GEMINI_EVALUATION_MODEL` | Somente servidor | Modelo das avaliações; padrão: `gemini-3.5-flash-lite`. |
 | `GEMINI_EVALUATION_MAX_OUTPUT_TOKENS` | Somente servidor | Teto de saída da avaliação; padrão: `900`. |
 | `GEMINI_EVALUATION_USER_RPM_LIMIT` | Somente servidor | Limite de avaliações por minuto por usuário; padrão: `2`. |
 | `GEMINI_EVALUATION_USER_DAILY_REQUEST_LIMIT` | Somente servidor | Limite diário de avaliações por usuário; padrão: `20`. |
