@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   buildOptimizedSimulationInstruction,
   isNaturalReply,
@@ -11,7 +11,7 @@ import {
 } from "../../../lib/simulation-context";
 import { migrateLocalData } from "../../../lib/local-domain";
 import { buildGenerationSnapshot } from "../../../lib/simulation-snapshot";
-import { createAdminSupabase } from "../../../lib/supabase-server";
+import { createAdminSupabase, createAuthenticatedSupabase } from "../../../lib/supabase-server";
 
 type SimulationRequest = {
   conversationId?: string;
@@ -274,15 +274,11 @@ async function callGemini(model: string, apiKey: string, body: string, timeoutMs
 async function authenticate(request: Request): Promise<AuthenticatedRequest | SimulationResult> {
   const authorization = request.headers.get("authorization") || "";
   const accessToken = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
   if (!accessToken) return technicalResult("Sua sessao expirou. Entre novamente para continuar.", 401, true);
-  if (!url || !key) return technicalResult("O backend de persistencia nao esta configurado.", 503, true);
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !key) return technicalResult("O backend de persistencia nao esta configurado.", 503, true);
 
-  const client = createClient(url, key, {
-    global: { headers: { Authorization: `Bearer ${accessToken}` } },
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  });
+  const client = createAuthenticatedSupabase(accessToken);
   const { data: authData, error: authError } = await client.auth.getUser(accessToken);
   if (authError || !authData.user) return technicalResult("Sua sessao expirou. Entre novamente para continuar.", 401, true);
   const { data: profile, error: profileError } = await client
