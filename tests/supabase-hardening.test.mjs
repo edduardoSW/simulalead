@@ -26,6 +26,17 @@ test("saves workspace and owned simulations atomically with optimistic concurren
   assert.match(repository, /this\.conversationVersions\.get\(conversation\.id\)/);
   assert.doesNotMatch(repository, /from\("workspace_states"\)\.upsert/);
   assert.doesNotMatch(repository, /from\("user_simulations"\)\.upsert/);
+  assert.doesNotMatch(migration, /\bconversation_id\s+text;/);
+  assert.match(migration, /current_conversation_id text;/);
+  assert.match(migration, /s\.conversation_id = current_conversation_id/);
+});
+
+test("qualifies joined usage-view columns to avoid ambiguous SQL references", async () => {
+  const migration = await readFile(new URL("supabase/migrations/202611140002_gemini_efficiency.sql", root), "utf8");
+  assert.equal((migration.match(/max\(e\.created_at\) last_call_at/g) || []).length, 2);
+  assert.doesNotMatch(migration, /max\(created_at\) last_call_at/);
+  assert.match(migration, /left join public\.profiles p on p\.id = e\.seller_id and p\.organization_id = e\.organization_id/);
+  assert.match(migration, /group by e\.organization_id, e\.seller_id, p\.full_name, e\.operation_kind/);
 });
 
 test("creates team members only through an authenticated server route with rollback", async () => {

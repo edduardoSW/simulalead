@@ -11,6 +11,7 @@ create table public.gemini_usage_events (
   conversation_id text not null,
   batch_id text not null,
   request_id text not null,
+  operation_kind text not null default 'simulation' check (operation_kind in ('simulation','evaluation')),
   provider_model text not null,
   provider_status integer not null,
   quota_reason text,
@@ -126,11 +127,76 @@ begin
   where r.seller_id = requested_seller_id and r.request_id = requested_request_id;
 
   insert into public.gemini_usage_events(
-    organization_id, seller_id, conversation_id, batch_id, request_id,
+    organization_id, seller_id, conversation_id, batch_id, request_id, operation_kind,
     provider_model, provider_status, quota_reason, prompt_tokens,
     candidate_tokens, thought_tokens, cached_tokens, total_tokens, duration_ms
   ) values (
-    caller_org, requested_seller_id, requested_conversation_id, requested_batch_id, requested_request_id,
+    caller_org, requested_seller_id, requested_conversation_id, requested_batch_id, requested_request_id, 'simulation',
+    normalized_model, coalesce(requested_provider_status, 0), normalized_reason,
+    greatest(coalesce(requested_prompt_tokens, 0), 0),
+    greatest(coalesce(requested_candidate_tokens, 0), 0),
+    greatest(coalesce(requested_thought_tokens, 0), 0),
+    greatest(coalesce(requested_cached_tokens, 0), 0),
+    greatest(coalesce(requested_total_tokens, 0), 0),
+    greatest(coalesce(requested_duration_ms, 0), 0)
+  );
+
+  if requested_provider_status = 429
+    and coalesce(normalized_reason, '') ~* '(daily|per.day|requestsperday|quota_exceeded)'
+  then
+    insert into public.gemini_provider_quota_state(provider_model, blocked_until, reason, updated_at)
+    values(
+      normalized_model,
+      (date_trunc('day', now() at time zone 'America/Los_Angeles') + interval '1 day') at time zone 'America/Los_Angeles',
+      normalized_reason,
+      now()
+    )
+    on conflict (provider_model) do update
+    set blocked_until = excluded.blocked_until,
+        reason = excluded.reason,
+        updated_at = excluded.updated_at;
+  end if;
+end;
+$$;
+
+create function public.record_gemini_evaluation_usage(
+  requested_seller_id uuid,
+  requested_conversation_id text,
+  requested_request_id text,
+  requested_provider_model text,
+  requested_provider_status integer,
+  requested_quota_reason text,
+  requested_prompt_tokens integer,
+  requested_candidate_tokens integer,
+  requested_thought_tokens integer,
+  requested_cached_tokens integer,
+  requested_total_tokens integer,
+  requested_duration_ms integer
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  caller_org uuid;
+  normalized_model text := left(coalesce(nullif(btrim(requested_provider_model), ''), 'unknown'), 120);
+  normalized_reason text := left(nullif(btrim(requested_quota_reason), ''), 300);
+begin
+  select p.organization_id into caller_org
+  from public.profiles p
+  where p.id = requested_seller_id and p.is_active;
+  if caller_org is null then raise exception 'authentication required'; end if;
+
+  delete from public.gemini_request_reservations r
+  where r.seller_id = requested_seller_id and r.request_id = requested_request_id;
+
+  insert into public.gemini_usage_events(
+    organization_id, seller_id, conversation_id, batch_id, request_id, operation_kind,
+    provider_model, provider_status, quota_reason, prompt_tokens,
+    candidate_tokens, thought_tokens, cached_tokens, total_tokens, duration_ms
+  ) values (
+    caller_org, requested_seller_id, requested_conversation_id, 'evaluation', requested_request_id, 'evaluation',
     normalized_model, coalesce(requested_provider_status, 0), normalized_reason,
     greatest(coalesce(requested_prompt_tokens, 0), 0),
     greatest(coalesce(requested_candidate_tokens, 0), 0),
@@ -269,6 +335,8 @@ $$;
 
 revoke all on function public.record_simulation_generation_usage(uuid,text,text,text,text,integer,text,integer,integer,integer,integer,integer,integer) from public, anon, authenticated;
 grant execute on function public.record_simulation_generation_usage(uuid,text,text,text,text,integer,text,integer,integer,integer,integer,integer,integer) to service_role;
+revoke all on function public.record_gemini_evaluation_usage(uuid,text,text,text,integer,text,integer,integer,integer,integer,integer,integer) from public, anon, authenticated;
+grant execute on function public.record_gemini_evaluation_usage(uuid,text,text,text,integer,text,integer,integer,integer,integer,integer,integer) to service_role;
 revoke all on function public.check_gemini_usage_limit(text,text,integer,integer,bigint) from public, anon;
 grant execute on function public.check_gemini_usage_limit(text,text,integer,integer,bigint) to authenticated;
 
@@ -278,7 +346,7 @@ grant select on public.gemini_usage_events to authenticated;
 create view public.gemini_usage_by_user
 with (security_invoker = true)
 as
-select e.organization_id, e.seller_id, coalesce(p.full_name, e.seller_id::text) seller_name, e.provider_model,
+select e.organization_id, e.seller_id, coalesce(p.full_name, e.seller_id::text) seller_name, e.operation_kind, e.provider_model,
        count(*)::bigint provider_calls,
        sum(e.prompt_tokens)::bigint prompt_tokens,
        sum(e.candidate_tokens)::bigint candidate_tokens,
@@ -290,12 +358,12 @@ select e.organization_id, e.seller_id, coalesce(p.full_name, e.seller_id::text) 
        max(e.created_at) last_call_at
 from public.gemini_usage_events e
 left join public.profiles p on p.id = e.seller_id and p.organization_id = e.organization_id
-group by e.organization_id, e.seller_id, p.full_name, e.provider_model;
+group by e.organization_id, e.seller_id, p.full_name, e.operation_kind, e.provider_model;
 
 create view public.gemini_usage_by_simulation
 with (security_invoker = true)
 as
-select e.organization_id, e.seller_id, coalesce(p.full_name, e.seller_id::text) seller_name, e.conversation_id, e.provider_model,
+select e.organization_id, e.seller_id, coalesce(p.full_name, e.seller_id::text) seller_name, e.conversation_id, e.operation_kind, e.provider_model,
        count(*)::bigint provider_calls,
        sum(e.prompt_tokens)::bigint prompt_tokens,
        sum(e.candidate_tokens)::bigint candidate_tokens,
@@ -306,7 +374,7 @@ select e.organization_id, e.seller_id, coalesce(p.full_name, e.seller_id::text) 
        max(e.created_at) last_call_at
 from public.gemini_usage_events e
 left join public.profiles p on p.id = e.seller_id and p.organization_id = e.organization_id
-group by e.organization_id, e.seller_id, p.full_name, e.conversation_id, e.provider_model;
+group by e.organization_id, e.seller_id, p.full_name, e.conversation_id, e.operation_kind, e.provider_model;
 
 revoke all on public.gemini_usage_by_user, public.gemini_usage_by_simulation from public, anon;
 grant select on public.gemini_usage_by_user, public.gemini_usage_by_simulation to authenticated;

@@ -76,7 +76,7 @@ declare
   next_version bigint;
   saved_at timestamptz := clock_timestamp();
   conversation jsonb;
-  conversation_id text;
+  current_conversation_id text;
   conversation_ids text[] := array[]::text[];
 begin
   select p.organization_id into caller_org
@@ -121,21 +121,21 @@ begin
   for conversation in select value from jsonb_array_elements(requested_conversations)
   loop
     if jsonb_typeof(conversation) <> 'object' then raise exception 'conversation must be an object'; end if;
-    conversation_id := nullif(btrim(conversation->>'id'), '');
-    if conversation_id is null or length(conversation_id) > 160 or conversation_id !~ '^[A-Za-z0-9:_-]+$'
+    current_conversation_id := nullif(btrim(conversation->>'id'), '');
+    if current_conversation_id is null or length(current_conversation_id) > 160 or current_conversation_id !~ '^[A-Za-z0-9:_-]+$'
     then raise exception 'invalid conversation id'; end if;
-    if conversation_id = any(conversation_ids) then raise exception 'duplicate conversation id'; end if;
-    conversation_ids := array_append(conversation_ids, conversation_id);
+    if current_conversation_id = any(conversation_ids) then raise exception 'duplicate conversation id'; end if;
+    conversation_ids := array_append(conversation_ids, current_conversation_id);
 
     begin
-      expected_conversation_version := coalesce((requested_conversation_versions->>conversation_id)::bigint, 0);
+      expected_conversation_version := coalesce((requested_conversation_versions->>current_conversation_id)::bigint, 0);
     exception when invalid_text_representation then
       raise exception 'invalid conversation version';
     end;
 
     select s.version into current_conversation_version
     from public.user_simulations s
-    where s.seller_id = auth.uid() and s.conversation_id = conversation_id
+    where s.seller_id = auth.uid() and s.conversation_id = current_conversation_id
     for update;
 
     if found and current_conversation_version <> expected_conversation_version then
@@ -148,7 +148,7 @@ begin
     values(
       caller_org,
       auth.uid(),
-      conversation_id,
+      current_conversation_id,
       jsonb_set(conversation, '{sellerId}', to_jsonb(auth.uid()::text), true),
       saved_at
     )

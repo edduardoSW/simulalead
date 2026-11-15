@@ -10,7 +10,7 @@ O fluxo mantém o histórico completo no Supabase, mas envia ao Gemini somente u
 - Até oito mensagens recentes, em vez de até dezesseis.
 - Mensagens limitadas a 1.000 caracteres no payload do provedor.
 - Saída padrão limitada a 180 tokens, suficiente para 15–55 palavras.
-- `thinkingLevel=minimal` por padrão nos modelos Gemini 3.
+- Raciocínio desativado nas chamadas Gemini 2.5 para evitar tokens de pensamento desnecessários.
 - Resumo extrativo local para orçamento, prazo, decisão, reunião, objeções e compromissos.
 - Idempotência por usuário, conversa e lote antes da chamada ao provedor.
 - Reserva transacional de capacidade para impedir rajadas concorrentes do mesmo usuário.
@@ -33,13 +33,15 @@ Os limites são configurados por ambiente, portanto a migração futura para um 
 - `GEMINI_MAX_OUTPUT_TOKENS=180`
 - `GEMINI_THINKING_LEVEL=minimal`
 
+As simulações usam `GEMINI_API_KEY` e `GEMINI_MODEL=gemini-2.5-flash-lite`. A avaliação final usa exclusivamente `GEMINI_EVALUATION_API_KEY` e `GEMINI_EVALUATION_MODEL=gemini-2.5-flash`, com limites próprios de RPM, requisições diárias e tokens. A segunda chave não é usada como fallback para contornar cotas.
+
 O limite diário segue a virada do dia no fuso `America/Los_Angeles`, alinhado ao reset de RPD informado pelo Gemini. Um 429 de minuto só é repetido uma vez quando o provedor informa `Retry-After` de até 20 segundos. Cota diária ou problema de faturamento não é repetido automaticamente.
 
 ## Monitoramento
 
 Cada tentativa real ao provedor gera um evento em `gemini_usage_events`, incluindo:
 
-- usuário, organização, conversa, lote e modelo;
+- usuário, organização, conversa, lote, tipo da operação e modelo;
 - status HTTP e motivo da cota;
 - tokens de entrada, saída, raciocínio, cache e total;
 - duração da chamada.
@@ -48,6 +50,6 @@ As views `gemini_usage_by_user` e `gemini_usage_by_simulation` usam `security_in
 
 ## Segurança
 
-A chave Gemini permanece somente em `GEMINI_API_KEY` na rota de servidor. A gravação de métricas aceita apenas `service_role`; clientes autenticados podem somente consultar dados liberados por RLS. Não existe rotação entre múltiplas chaves para contornar limites.
+As duas chaves Gemini permanecem somente nas rotas de servidor. `GEMINI_API_KEY` atende apenas simulações e `GEMINI_EVALUATION_API_KEY` apenas avaliações concluídas. A gravação de métricas aceita somente `service_role`; clientes autenticados consultam apenas dados liberados por RLS. Não existe rotação entre chaves para contornar limites.
 
 O cache explícito não foi ativado: ele é um recurso cobrado e o contexto otimizado normalmente fica abaixo do mínimo útil para caching. Tokens atendidos pelo cache implícito continuam sendo registrados quando o provedor os informa.

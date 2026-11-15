@@ -232,6 +232,7 @@ test("limits Gemini consumption and records provider calls and tokens", async ()
     readFile(new URL("../supabase/migrations/202611140002_gemini_efficiency.sql", import.meta.url), "utf8"),
   ]);
   assert.match(route, /GEMINI_MAX_OUTPUT_TOKENS",\s*180/);
+  assert.match(route, /"gemini-2\.5-flash-lite"/);
   assert.match(route, /configuredThinkingLevel/);
   assert.match(route, /for \(let attempt = 0; attempt < 2; attempt \+= 1\)/);
   assert.doesNotMatch(route, /const models\s*=/);
@@ -247,6 +248,27 @@ test("limits Gemini consumption and records provider calls and tokens", async ()
   assert.match(migration, /security_invoker = true/);
 });
 
+test("separates simulation and final evaluation Gemini workloads", async () => {
+  const [simulationRoute, evaluationRoute, migration, envExample] = await Promise.all([
+    readFile(new URL("../app/api/simulate/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/evaluate/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/202611140002_gemini_efficiency.sql", import.meta.url), "utf8"),
+    readFile(new URL("../.env.example", import.meta.url), "utf8"),
+  ]);
+  assert.match(simulationRoute, /process\.env\.GEMINI_API_KEY/);
+  assert.doesNotMatch(simulationRoute, /GEMINI_EVALUATION_API_KEY/);
+  assert.match(evaluationRoute, /process\.env\.GEMINI_EVALUATION_API_KEY/);
+  assert.doesNotMatch(evaluationRoute, /process\.env\.GEMINI_API_KEY\b/);
+  assert.match(evaluationRoute, /conversation\.status !== "completed"/);
+  assert.match(evaluationRoute, /evaluationsInFlight/);
+  assert.match(evaluationRoute, /record_gemini_evaluation_usage/);
+  assert.match(evaluationRoute, /thinkingBudget:\s*0/);
+  assert.match(migration, /operation_kind text not null default 'simulation'/);
+  assert.match(migration, /'evaluation', requested_request_id, 'evaluation'/);
+  assert.match(envExample, /GEMINI_MODEL=gemini-2\.5-flash-lite/);
+  assert.match(envExample, /GEMINI_EVALUATION_MODEL=gemini-2\.5-flash/);
+});
+
 test("exposes tenant-scoped Gemini monitoring by user and simulation", async () => {
   const [migration, panel] = await Promise.all([
     readFile(new URL("../supabase/migrations/202611140002_gemini_efficiency.sql", import.meta.url), "utf8"),
@@ -257,6 +279,7 @@ test("exposes tenant-scoped Gemini monitoring by user and simulation", async () 
   assert.match(migration, /public\.has_role\(array\['admin','manager'\]/);
   assert.match(panel, /gemini_usage_by_user/);
   assert.match(panel, /gemini_usage_by_simulation/);
+  assert.match(panel, /operation_kind/);
 });
 
 test("persists idempotent generation state behind authenticated ownership checks", async () => {

@@ -13,6 +13,8 @@ A migration `202611140001_saas_hardening.sql` torna a gravação do workspace e 
 - `SUPABASE_SERVICE_ROLE_KEY`, somente no servidor
 - `GEMINI_API_KEY`, somente no servidor
 - `GEMINI_MODEL`
+- `GEMINI_EVALUATION_API_KEY`
+- `GEMINI_EVALUATION_MODEL`
 - `GEMINI_TIMEOUT_MS`
 - `GEMINI_MAX_OUTPUT_TOKENS`, padrão `180`
 - `GEMINI_THINKING_LEVEL`, padrão `minimal`

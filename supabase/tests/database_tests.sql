@@ -26,6 +26,12 @@ do $$ begin
   assert to_regclass('public.gemini_usage_by_simulation') is not null, 'Gemini simulation usage view missing';
   assert to_regprocedure('public.check_gemini_usage_limit(text,text,integer,integer,bigint)') is not null,
     'Gemini usage limit function missing';
+  assert to_regprocedure('public.record_gemini_evaluation_usage(uuid,text,text,text,integer,text,integer,integer,integer,integer,integer,integer)') is not null,
+    'Gemini evaluation usage function missing';
+  assert exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='gemini_usage_events' and column_name='operation_kind'
+  ), 'Gemini operation kind missing';
   assert exists (
     select 1 from information_schema.columns
     where table_schema='public' and table_name='user_simulations' and column_name='version'

@@ -7,6 +7,7 @@ type UserUsage = {
   seller_id: string;
   seller_name: string;
   provider_model: string;
+  operation_kind: "simulation" | "evaluation";
   provider_calls: number;
   prompt_tokens: number;
   candidate_tokens: number;
@@ -21,6 +22,7 @@ type SimulationUsage = {
   seller_name: string;
   conversation_id: string;
   provider_model: string;
+  operation_kind: "simulation" | "evaluation";
   provider_calls: number;
   total_tokens: number;
   last_quota_reason: string | null;
@@ -37,8 +39,8 @@ export function GeminiUsagePanel() {
   useEffect(() => {
     let active = true;
     Promise.all([
-      supabase.from("gemini_usage_by_user").select("seller_id,seller_name,provider_model,provider_calls,prompt_tokens,candidate_tokens,thought_tokens,cached_tokens,total_tokens,rate_limit_errors").order("total_tokens", { ascending: false }).limit(50),
-      supabase.from("gemini_usage_by_simulation").select("seller_id,seller_name,conversation_id,provider_model,provider_calls,total_tokens,last_quota_reason").order("total_tokens", { ascending: false }).limit(50),
+      supabase.from("gemini_usage_by_user").select("seller_id,seller_name,operation_kind,provider_model,provider_calls,prompt_tokens,candidate_tokens,thought_tokens,cached_tokens,total_tokens,rate_limit_errors").order("total_tokens", { ascending: false }).limit(50),
+      supabase.from("gemini_usage_by_simulation").select("seller_id,seller_name,conversation_id,operation_kind,provider_model,provider_calls,total_tokens,last_quota_reason").order("total_tokens", { ascending: false }).limit(50),
     ]).then(([userResult, simulationResult]) => {
       if (!active) return;
       const queryError = userResult.error || simulationResult.error;
@@ -59,8 +61,8 @@ export function GeminiUsagePanel() {
     {!loading && !error && !users.length && <small>Nenhuma chamada registrada após a migration de métricas.</small>}
     {!!users.length && <div className="usage-table">
       <div className="usage-row usage-head"><b>Usuário</b><b>Chamadas</b><b>Entrada</b><b>Saída</b><b>Raciocínio</b><b>Total</b><b>429</b></div>
-      {users.map((item) => <div className="usage-row" key={`${item.seller_id}:${item.provider_model}`}>
-        <span><b>{item.seller_name}</b><small>{item.provider_model}</small></span>
+      {users.map((item) => <div className="usage-row" key={`${item.seller_id}:${item.operation_kind}:${item.provider_model}`}>
+        <span><b>{item.seller_name}</b><small>{item.operation_kind === "evaluation" ? "Avaliação" : "Simulação"} · {item.provider_model}</small></span>
         <span>{number.format(item.provider_calls)}</span><span>{number.format(item.prompt_tokens)}</span>
         <span>{number.format(item.candidate_tokens)}</span><span>{number.format(item.thought_tokens)}</span>
         <span>{number.format(item.total_tokens)}{item.cached_tokens > 0 && <small>{number.format(item.cached_tokens)} em cache</small>}</span>
@@ -68,8 +70,8 @@ export function GeminiUsagePanel() {
       </div>)}
     </div>}
     {!!simulations.length && <details><summary>Consumo por simulação</summary><div className="usage-table compact">
-      {simulations.map((item) => <div className="usage-row" key={`${item.seller_id}:${item.conversation_id}:${item.provider_model}`}>
-        <span><b>{item.seller_name}</b><small>{item.conversation_id}</small></span>
+      {simulations.map((item) => <div className="usage-row" key={`${item.seller_id}:${item.conversation_id}:${item.operation_kind}:${item.provider_model}`}>
+        <span><b>{item.seller_name}</b><small>{item.operation_kind === "evaluation" ? "Avaliação" : "Simulação"} · {item.conversation_id}</small></span>
         <span>{number.format(item.provider_calls)} chamadas</span><span>{number.format(item.total_tokens)} tokens</span>
         <span>{item.last_quota_reason || "Sem erro de cota"}</span>
       </div>)}

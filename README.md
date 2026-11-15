@@ -18,14 +18,20 @@ Preencha `.env.local` com as credenciais do seu ambiente. Esse arquivo é ignora
 
 | Variável | Visibilidade | Finalidade |
 | --- | --- | --- |
-| `GEMINI_API_KEY` | Somente servidor | Chave da API Gemini. Nunca use prefixo `NEXT_PUBLIC_`. |
-| `GEMINI_MODEL` | Somente servidor | Modelo usado nas simulações. O padrão é `gemini-3.8-flash`. |
+| `GEMINI_API_KEY` | Somente servidor | Chave usada exclusivamente nas simulações. Nunca use prefixo `NEXT_PUBLIC_`. |
+| `GEMINI_MODEL` | Somente servidor | Modelo das simulações; padrão: `gemini-2.5-flash-lite`. |
 | `GEMINI_TIMEOUT_MS` | Somente servidor | Timeout por tentativa, em milissegundos. |
 | `GEMINI_MAX_OUTPUT_TOKENS` | Somente servidor | Teto de saída por resposta; padrão econômico: `180`. |
 | `GEMINI_THINKING_LEVEL` | Somente servidor | Nível de raciocínio para Gemini 3; padrão: `minimal`. |
 | `GEMINI_USER_RPM_LIMIT` | Somente servidor | Limite de chamadas por minuto por usuário; padrão: `4`. |
 | `GEMINI_USER_DAILY_REQUEST_LIMIT` | Somente servidor | Limite diário de chamadas por usuário; padrão: `50`. |
 | `GEMINI_USER_DAILY_TOKEN_LIMIT` | Somente servidor | Limite diário de tokens por usuário; padrão: `200000`. |
+| `GEMINI_EVALUATION_API_KEY` | Somente servidor | Chave exclusiva da avaliação final. Não é fallback da simulação. |
+| `GEMINI_EVALUATION_MODEL` | Somente servidor | Modelo das avaliações; padrão: `gemini-2.5-flash`. |
+| `GEMINI_EVALUATION_MAX_OUTPUT_TOKENS` | Somente servidor | Teto de saída da avaliação; padrão: `900`. |
+| `GEMINI_EVALUATION_USER_RPM_LIMIT` | Somente servidor | Limite de avaliações por minuto por usuário; padrão: `2`. |
+| `GEMINI_EVALUATION_USER_DAILY_REQUEST_LIMIT` | Somente servidor | Limite diário de avaliações por usuário; padrão: `20`. |
+| `GEMINI_EVALUATION_USER_DAILY_TOKEN_LIMIT` | Somente servidor | Limite diário de tokens de avaliação; padrão: `200000`. |
 | `NEXT_PUBLIC_SUPABASE_URL` | Pública | URL do projeto Supabase. |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Pública | Chave publicável do Supabase. Não use a `service_role`. |
 
@@ -39,7 +45,7 @@ Preencha `.env.local` com as credenciais do seu ambiente. Esse arquivo é ignora
 4. No Supabase, adicione o domínio da Vercel em **Authentication > URL Configuration**, incluindo a URL de produção e os previews que desejar autorizar.
 5. Execute o primeiro deploy.
 
-Não configure `GEMINI_API_KEY` como variável pública. A rota `/api/simulate` valida o token do Supabase no servidor antes de chamar o Gemini.
+Não configure nenhuma chave Gemini como variável pública. As rotas `/api/simulate` e `/api/evaluate` validam o token do Supabase no servidor antes de chamar o Gemini.
 
 ## Verificação
 

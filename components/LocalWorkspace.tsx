@@ -20,11 +20,13 @@ import { LocalConversations } from "./LocalConversations";
 import { LocalTrainings } from "./LocalTrainings";
 import { SupabaseTeamManagement } from "./LocalAuth";
 import { GeminiUsagePanel } from "./GeminiUsagePanel";
+import { evaluationCriteriaLabels } from "../lib/gemini-evaluation";
 
 type Profile = { id: string; organization_id: string; role: string };
 type Sender = "seller" | "contact";
 type InternalNotification = { id: string; conversationId: string; messageId: string; contact: string; company: string; preview: string };
 type SimulationApiResult = { status?: "processing" | "completed" | "failed" | "interrupted"; text?: string; ended?: boolean; error?: string; retryable?: boolean; conversationId?: string; batchId?: string; requestId?: string; retryAfterSeconds?: number };
+type EvaluationApiResult = { evaluation?: LocalData["evaluations"][number]; error?: string; retryAfterSeconds?: number };
 
 const leadGenerationClientTimeoutMs = 75_000;
 
@@ -41,6 +43,7 @@ function LocalWorkspaceInner({ service, profile, initialSection, onLogout }: { s
   const [selectedConversationId, setSelectedConversationId] = useState("");
   const [activeGenerations, setActiveGenerations] = useState<Record<string, ActiveGeneration>>({});
   const [generationErrors, setGenerationErrors] = useState<GenerationErrors>({});
+  const [evaluatingConversationId, setEvaluatingConversationId] = useState("");
   const [notifications, setNotifications] = useState<InternalNotification[]>([]);
   const dataRef = useRef(data);
   const sectionRef = useRef(section);
@@ -48,6 +51,7 @@ function LocalWorkspaceInner({ service, profile, initialSection, onLogout }: { s
   const activeGenerationRef = useRef(new Map<string, ActiveGeneration>());
   const completedBatchesRef = useRef(new Set<string>());
   const recoveryStartedRef = useRef(new Set<string>());
+  const evaluationLocksRef = useRef(new Set<string>());
 
   const commitData = useCallback((next: LocalData) => {
     dataRef.current = next;
@@ -320,13 +324,39 @@ function LocalWorkspaceInner({ service, profile, initialSection, onLogout }: { s
     setGenerationErrors((current) => reconcileGenerationErrors(current, data.conversations));
   }, [data.conversations]);
 
-  const evaluateConversation = useCallback(async (conversationId: string) => {
+  const finishConversation = useCallback(async (conversationId: string) => {
     try {
-      const next = await service.evaluateConversation(conversationId);
+      const next = await service.finishConversation(conversationId);
+      commitData(next);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Nao foi possivel finalizar a simulacao.");
+    }
+  }, [commitData, service]);
+
+  const evaluateConversation = useCallback(async (conversationId: string) => {
+    const existing = dataRef.current.evaluations.find((item) => item.conversationId === conversationId);
+    if (existing) { navigate("evaluations"); return; }
+    if (evaluationLocksRef.current.has(conversationId)) return;
+    evaluationLocksRef.current.add(conversationId);
+    setEvaluatingConversationId(conversationId);
+    setError("");
+    try {
+      const accessToken = await getAccessToken();
+      const request = await fetchWithTimeout("/api/evaluate", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ conversationId, requestId: crypto.randomUUID() }),
+      }, 55_000);
+      const result = await request.json().catch(() => ({ error: "Resposta inválida da avaliação." })) as EvaluationApiResult;
+      if (!request.ok || !result.evaluation) throw new Error(result.error || "Nao foi possivel gerar a avaliacao.");
+      const next = await service.saveEvaluation(result.evaluation);
       commitData(next);
       navigate("evaluations");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Nao foi possivel gerar a avaliacao.");
+    } finally {
+      evaluationLocksRef.current.delete(conversationId);
+      setEvaluatingConversationId("");
     }
   }, [commitData, navigate, service]);
 
@@ -357,10 +387,12 @@ function LocalWorkspaceInner({ service, profile, initialSection, onLogout }: { s
             selectedConversationId={selectedConversationId}
             activeGenerations={activeGenerations}
             generationErrors={generationErrors}
+            evaluatingConversationId={evaluatingConversationId}
             onSelectConversation={selectConversation}
             onReadConversation={markConversationRead}
             onSendMessage={addMessage}
             onConfirmBatch={confirmBatch}
+            onFinalizeConversation={finishConversation}
             onEvaluateConversation={evaluateConversation}
           />
         </div>
@@ -390,10 +422,12 @@ function Content({
   selectedConversationId,
   activeGenerations,
   generationErrors,
+  evaluatingConversationId,
   onSelectConversation,
   onReadConversation,
   onSendMessage,
   onConfirmBatch,
+  onFinalizeConversation,
   onEvaluateConversation,
 }: {
   section: WorkspaceSection;
@@ -406,17 +440,19 @@ function Content({
   selectedConversationId: string;
   activeGenerations: Record<string, ActiveGeneration>;
   generationErrors: GenerationErrors;
+  evaluatingConversationId: string;
   onSelectConversation: (conversationId: string) => void;
   onReadConversation: (conversationId: string) => Promise<void>;
   onSendMessage: (id: string, text: string, contactId?: string, sender?: Sender, batchId?: string, requestId?: string) => Promise<void>;
   onConfirmBatch: (conversationId: string, batchId: string) => Promise<void>;
+  onFinalizeConversation: (conversationId: string) => Promise<void>;
   onEvaluateConversation: (conversationId: string) => Promise<void>;
 }) {
   const organization = data.organization;
   if (section === "home") return <><Title eyebrow="VISAO GERAL" title={`Ola, ${organization?.ownerName || "time"}.`} text="Treine vendas de projetos de TI com oportunidades completas." /><div className="real-metrics"><Stat value={data.opportunities.length} label="Oportunidades" /><Stat value={data.conversations.length} label="Conversas" /><Stat value={data.scenarios.length} label="Treinamentos" /><Stat value={data.evaluations.length} label="Avaliacoes" /></div></>;
   if (section === "leads") return <LocalLeads data={data} onStart={async (id) => { try { const next = await service.startConversation(id, profile.id); setData(next); const started = next.conversations.find((conversation) => conversation.accountId === id && conversation.status === "active" && conversation.sellerId === profile.id); if (started) onSelectConversation(started.id); navigate("conversations"); } catch (cause) { setError(cause instanceof Error ? cause.message : "Nao foi possivel iniciar"); } }} />;
   if (section === "opportunities") return <Opportunities data={data} onOpen={() => navigate("leads")} />;
-  if (section === "conversations") return <LocalConversations data={data} selectedConversationId={selectedConversationId} activeGenerations={activeGenerations} generationErrors={generationErrors} onSelect={onSelectConversation} onRead={onReadConversation} onSend={onSendMessage} onConfirmBatch={onConfirmBatch} onEvaluate={onEvaluateConversation} onStartAnother={() => navigate("leads")} />;
+  if (section === "conversations") return <LocalConversations data={data} selectedConversationId={selectedConversationId} activeGenerations={activeGenerations} generationErrors={generationErrors} evaluatingConversationId={evaluatingConversationId} onSelect={onSelectConversation} onRead={onReadConversation} onSend={onSendMessage} onConfirmBatch={onConfirmBatch} onFinalize={onFinalizeConversation} onEvaluate={onEvaluateConversation} onStartAnother={() => navigate("leads")} />;
   if (section === "scenarios") return <LocalTrainings scenarios={data.scenarios} />;
   if (section === "evaluations") return <Evaluations data={data} onOpenConversation={(conversationId) => { onSelectConversation(conversationId); navigate("conversations"); }} />;
   return <Settings profile={profile} />;
@@ -431,7 +467,7 @@ function Settings({ profile }: { profile: Profile }) {
 }
 
 function Evaluations({ data, onOpenConversation }: { data: LocalData; onOpenConversation: (conversationId: string) => void }) {
-  return <><Title eyebrow="FEEDBACK DE VENDAS" title="Avaliações" text="Feedback objetivo para transformar cada conversa em evolução prática." />{data.evaluations.length === 0 ? <Empty title="Nenhuma avaliação disponível" text="Quando uma conversa for encerrada, use o botão de avaliação para gerar seu feedback." /> : <div className="evaluation-grid">{data.evaluations.map((evaluation) => { const conversation = data.conversations.find((item) => item.id === evaluation.conversationId), account = data.accounts.find((item) => item.id === conversation?.accountId); return <article className="evaluation-card" key={evaluation.id}><header><div><p className="eyebrow">CONVERSA ANALISADA</p><h2>{account?.name || "Simulação comercial"}</h2><span>{new Date(evaluation.createdAt).toLocaleDateString("pt-BR")}</span></div><strong>{evaluation.score}<small>/100</small></strong></header><p className="evaluation-summary">{evaluation.summary}</p><div className="evaluation-feedback"><section><h3><i aria-hidden="true">✓</i> Pontos fortes</h3>{(evaluation.strengths || ["Conversa concluída e pronta para revisão."]).map((item) => <p key={item}>{item}</p>)}</section><section><h3><i aria-hidden="true">↗</i> Para melhorar</h3>{(evaluation.improvements || ["Revise a conversa e escolha uma habilidade para praticar."]).map((item) => <p key={item}>{item}</p>)}</section></div><div className="evaluation-next"><span aria-hidden="true">◎</span><div><b>Próximo treino</b><p>{evaluation.nextStep || "Pratique uma nova abordagem aplicando o feedback acima."}</p></div></div><button onClick={() => onOpenConversation(evaluation.conversationId)}>Rever conversa <span aria-hidden="true">↗</span></button></article>; })}</div>}</>;
+  return <><Title eyebrow="FEEDBACK DE VENDAS" title="Avaliações" text="Feedback objetivo para transformar cada conversa em evolução prática." />{data.evaluations.length === 0 ? <Empty title="Nenhuma avaliação disponível" text="Quando uma conversa for encerrada, use o botão de avaliação para gerar seu feedback." /> : <div className="evaluation-grid">{data.evaluations.map((evaluation) => { const conversation = data.conversations.find((item) => item.id === evaluation.conversationId), account = data.accounts.find((item) => item.id === conversation?.accountId); return <article className="evaluation-card" key={evaluation.id}><header><div><p className="eyebrow">CONVERSA ANALISADA</p><h2>{account?.name || "Simulação comercial"}</h2><span>{new Date(evaluation.createdAt).toLocaleDateString("pt-BR")}{evaluation.model ? ` · ${evaluation.model}` : ""}</span></div><strong>{evaluation.score}<small>/100</small></strong></header><p className="evaluation-summary">{evaluation.summary}</p>{evaluation.criteria && <div className="evaluation-criteria">{Object.entries(evaluationCriteriaLabels).map(([key,label]) => <div key={key}><span>{label}</span><b>{evaluation.criteria?.[key as keyof typeof evaluationCriteriaLabels] ?? 0}<small>/10</small></b></div>)}</div>}<div className="evaluation-feedback"><section><h3><i aria-hidden="true">✓</i> Pontos fortes</h3>{(evaluation.strengths || ["Conversa concluída e pronta para revisão."]).map((item) => <p key={item}>{item}</p>)}</section><section><h3><i aria-hidden="true">↗</i> Para melhorar</h3>{(evaluation.improvements || ["Revise a conversa e escolha uma habilidade para praticar."]).map((item) => <p key={item}>{item}</p>)}</section></div>{evaluation.recommendations?.length ? <div className="evaluation-recommendations"><h3>Recomendações práticas</h3>{evaluation.recommendations.map((item) => <p key={item}>{item}</p>)}</div> : null}<div className="evaluation-next"><span aria-hidden="true">◎</span><div><b>Próximo treino</b><p>{evaluation.nextStep || "Pratique uma nova abordagem aplicando o feedback acima."}</p></div></div><button onClick={() => onOpenConversation(evaluation.conversationId)}>Rever conversa <span aria-hidden="true">↗</span></button></article>; })}</div>}</>;
 }
 
 const stageLabel = (stage: string) => ({ prospecting: "Prospeccao", first_contact: "Primeiro contato", initial_qualification: "Qualificacao inicial", responsible_identification: "Identificacao do responsavel", handoff: "Encaminhamento", discovery: "Descoberta", decision_mapping: "Mapa de decisao", objection_handling: "Objecoes", diagnostic_meeting: "Reuniao diagnostica", proposal: "Proposta", negotiation: "Negociacao", closed_won: "Fechada", closed_lost: "Perdida", no_response: "Sem resposta" }[stage] || stage);
@@ -465,7 +501,7 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === "AbortError") {
-      throw new Error("A geracao demorou demais. Tente novamente para retomar este mesmo lote.");
+      throw new Error("A operação demorou demais. Tente novamente.");
     }
     throw cause;
   } finally {

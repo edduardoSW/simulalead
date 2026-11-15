@@ -132,7 +132,7 @@ function configuredGeminiTimeoutMs() {
 }
 
 function configuredGeminiModel() {
-  return process.env.GEMINI_MODEL?.trim() || "gemini-3.8-flash";
+  return process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash-lite";
 }
 
 function configuredPositiveInteger(name: string, fallback: number, maximum: number) {
@@ -579,7 +579,11 @@ async function generateSimulationResult(
     generationConfig: {
       temperature: lead.difficulty === "Difícil" || lead.difficulty === "DifÃ­cil" ? 0.8 : 0.7,
       maxOutputTokens: configuredPositiveInteger("GEMINI_MAX_OUTPUT_TOKENS", 180, 480),
-      ...(preferredModel.startsWith("gemini-3") ? { thinkingConfig: { thinkingLevel: configuredThinkingLevel() } } : {}),
+      ...(preferredModel.startsWith("gemini-2.5")
+        ? { thinkingConfig: { thinkingBudget: 0 } }
+        : preferredModel.startsWith("gemini-3")
+          ? { thinkingConfig: { thinkingLevel: configuredThinkingLevel() } }
+          : {}),
     },
   });
   let lastStatus = 502;
