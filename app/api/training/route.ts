@@ -16,11 +16,11 @@ export const maxDuration = 60;
 type TrainingRequest = {
   conversationId?: unknown;
   requestId?: unknown;
-  lead?: unknown;
-  messages?: unknown;
+  sellerText?: unknown;
 };
 type UsageLimitRow = { allowed?: boolean; limit_reason?: string | null; retry_after_seconds?: number };
 type TrainingResult = { status: number; body: Record<string, unknown> };
+type TrainingClaimRow = { claimed?: boolean; response_text?: string | null; session_payload?: unknown; session_status?: string };
 
 const requestsInFlight = new Map<string, Promise<TrainingResult>>();
 const recentResults = new Map<string, { expiresAt: number; result: TrainingResult }>();
@@ -128,6 +128,49 @@ async function generate(userId: string, client: ReturnType<typeof createAuthenti
   return result(200, { text: reply.text, ended: reply.ended, model, conversationId, requestId });
 }
 
+async function processTrainingTurn(
+  userId: string,
+  client: ReturnType<typeof createAuthenticatedSupabase>,
+  conversationId: string,
+  requestId: string,
+  sellerText: string,
+): Promise<TrainingResult> {
+  const { data: claimData, error: claimError } = await client.rpc("claim_independent_training_turn", {
+    requested_conversation_id: conversationId,
+    requested_request_id: requestId,
+    requested_seller_text: sellerText,
+  });
+  if (claimError) return result(503, { error: "Não foi possível registrar a mensagem do treinamento." });
+  const claim = (Array.isArray(claimData) ? claimData[0] : claimData) as TrainingClaimRow | null;
+  if (!claim) return result(503, { error: "O Supabase não confirmou o turno do treinamento." });
+  if (claim.response_text) return result(200, { text: claim.response_text, conversationId, requestId, session: claim.session_payload });
+  if (!claim.claimed) return result(202, { status: "processing", conversationId, requestId });
+
+  const payload = claim.session_payload && typeof claim.session_payload === "object" && !Array.isArray(claim.session_payload)
+    ? claim.session_payload as Record<string, unknown>
+    : null;
+  const lead = parseLead(payload?.lead);
+  const messages = parseMessages(payload?.messages);
+  if (!lead || !messages || messages.at(-1)?.from !== "seller") {
+    await client.rpc("fail_independent_training_turn", { requested_conversation_id: conversationId, requested_request_id: requestId });
+    return result(409, { error: "A sessão persistida do treinamento está incompleta. Reinicie o treinamento." });
+  }
+
+  const generated = await generate(userId, client, conversationId, requestId, lead, messages);
+  if (generated.status === 200 && typeof generated.body.text === "string") {
+    const { data: completed, error: completeError } = await client.rpc("complete_independent_training_turn", {
+      requested_conversation_id: conversationId,
+      requested_request_id: requestId,
+      generated_text: generated.body.text,
+      requested_training_ended: Boolean(generated.body.ended),
+    });
+    if (completeError || !completed) return result(503, { error: "A resposta foi gerada, mas não pôde ser salva. Tente novamente." });
+    return result(200, { ...generated.body, session: completed });
+  }
+  await client.rpc("fail_independent_training_turn", { requested_conversation_id: conversationId, requested_request_id: requestId });
+  return generated;
+}
+
 export async function POST(request: Request) {
   const contentLength = Number(request.headers.get("content-length") || "0");
   if (contentLength > maxRequestBytes) return response(result(413, { error: "Solicitação muito grande." }));
@@ -139,9 +182,8 @@ export async function POST(request: Request) {
     if (new TextEncoder().encode(raw).byteLength > maxRequestBytes) return response(result(413, { error: "Solicitação muito grande." }));
     body = JSON.parse(raw) as TrainingRequest;
   } catch { return response(result(400, { error: "Solicitação inválida." })); }
-  const lead = parseLead(body.lead);
-  const messages = parseMessages(body.messages);
-  if (!validId(body.conversationId) || !validId(body.requestId) || !lead || !messages || messages.at(-1)?.from !== "seller") {
+  const sellerText = limitedText(body.sellerText, 4_000);
+  if (!validId(body.conversationId) || !validId(body.requestId) || !sellerText) {
     return response(result(400, { error: "Dados do treinamento inválidos." }));
   }
 
@@ -157,7 +199,7 @@ export async function POST(request: Request) {
   if (cached && cached.expiresAt > Date.now()) return response(cached.result);
   const running = requestsInFlight.get(key);
   if (running) return response(await running);
-  const promise = generate(authData.user.id, client, body.conversationId, body.requestId, lead, messages);
+  const promise = processTrainingTurn(authData.user.id, client, body.conversationId, body.requestId, sellerText);
   requestsInFlight.set(key, promise);
   try {
     const generated = await promise;

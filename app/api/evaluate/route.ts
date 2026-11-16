@@ -33,7 +33,7 @@ async function callGemini(apiKey: string, model: string, prompt: string): Promis
   return generateGeminiContent({
     apiKey,
     model,
-    timeoutMs: 35_000,
+    timeoutMs: 16_000,
     body: {
       systemInstruction: { parts: [{ text: "Voce e um avaliador de treinamento comercial B2B. Responda somente com o JSON solicitado, sem markdown." }] },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -108,8 +108,13 @@ async function evaluate(userId: string, organizationId: string, client: ReturnTy
   if (limit?.allowed === false) return { status: 429, body: { error: "Limite de avaliações atingido. Tente novamente mais tarde.", retryAfterSeconds: Number(limit.retry_after_seconds || 0) } };
 
   const prompt = buildEvaluationPrompt(conversation, account, product);
-  const attempt = await callGemini(apiKey, model, prompt);
-  await recordUsage(userId, conversationId, requestId, model, attempt);
+  let attempt: GeminiAttempt | undefined;
+  for (let attemptNumber = 0; attemptNumber < 3; attemptNumber += 1) {
+    attempt = await callGemini(apiKey, model, prompt);
+    await recordUsage(userId, conversationId, attemptNumber ? `${requestId}:retry${attemptNumber}` : requestId, model, attempt);
+    if (attempt.ok || ![500, 502, 503, 504].includes(attempt.status)) break;
+  }
+  if (!attempt) return { status: 503, body: { error: "Não foi possível iniciar a avaliação. Tente novamente." } };
   if (!attempt.ok) return classifyEvaluationProviderFailure({
     status: attempt.status,
     error: attempt.errorMessage,
@@ -118,7 +123,17 @@ async function evaluate(userId: string, organizationId: string, client: ReturnTy
   }, model);
   const raw = attempt.data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim() || "";
   try {
-    return { status: 200, body: { evaluation: parseEvaluationResponse(raw, conversationId, model) } };
+    const evaluation = parseEvaluationResponse(raw, conversationId, model);
+    const { data: persisted, error: persistenceError } = await createAdminSupabase().rpc("persist_gemini_evaluation", {
+      requested_seller_id: userId,
+      requested_organization_id: organizationId,
+      requested_conversation_id: conversationId,
+      requested_evaluation: evaluation,
+    });
+    if (persistenceError || !persisted) {
+      return { status: 503, body: { error: "A avaliação foi gerada, mas não pôde ser salva. A conversa foi preservada; tente novamente." } };
+    }
+    return { status: 200, body: { evaluation: persisted as LocalEvaluation } };
   } catch {
     return { status: 502, body: { error: "A avaliação retornou em formato inválido. Tente novamente." } };
   }

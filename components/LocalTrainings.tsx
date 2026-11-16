@@ -4,8 +4,10 @@ import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent as 
 import type { LocalScenario } from "../lib/local-domain";
 import { supabase } from "../lib/supabase-client";
 
-type Message = { from: "seller" | "lead"; text: string };
-type SimulationResult = { text?: string; error?: string; conversationId?: string };
+type Message = { id?: string; from: "seller" | "lead"; text: string; requestId?: string };
+type TrainingStage = "briefing" | "practice" | "result";
+type TrainingSessionPayload = { lead?: Record<string, unknown>; messages?: Message[]; interfaceStage?: TrainingStage };
+type SimulationResult = { status?: "processing"; text?: string; error?: string; conversationId?: string; session?: TrainingSessionPayload };
 type TrainingIconName = "target" | "briefcase" | "building" | "layers" | "info" | "arrow";
 
 function TrainingIcon({ name }: { name: TrainingIconName }) {
@@ -25,16 +27,16 @@ function initials(name?: string) {
   return (name || "Contato do treinamento").split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 }
 
-export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
+export function LocalTrainings({ scenarios, selectedScenarioId, onSelectedScenarioChange }: { scenarios: LocalScenario[]; selectedScenarioId: string; onSelectedScenarioChange: (scenarioId: string) => void }) {
   const [selected, setSelected] = useState<LocalScenario | null>(null);
-  const [active, setActive] = useState(false);
+  const [stage, setStage] = useState<TrainingStage>("briefing");
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState("");
   const [starting, setStarting] = useState(false);
   const sessionRef = useRef("");
-  const retryMessagesRef = useRef<Message[]>([]);
+  const retryTurnRef = useRef<{ requestId: string; sellerText: string } | null>(null);
   const modalRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
@@ -45,16 +47,58 @@ export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
   const close = useCallback(() => {
     sessionRef.current = "";
     setSelected(null);
-    setActive(false);
+    setStage("briefing");
     setMessages([]);
     setDraft("");
     setError("");
     setWaiting(false);
     setStarting(false);
     startLockRef.current = false;
-    retryMessagesRef.current = [];
+    retryTurnRef.current = null;
+    onSelectedScenarioChange("");
     window.requestAnimationFrame(() => openerRef.current?.focus());
+  }, [onSelectedScenarioChange]);
+
+  const applySession = useCallback((scenario: LocalScenario, conversationId: string, payload: TrainingSessionPayload) => {
+    const restoredMessages = Array.isArray(payload.messages)
+      ? payload.messages.filter((message): message is Message => Boolean(message) && (message.from === "seller" || message.from === "lead") && typeof message.text === "string")
+      : [];
+    setSelected(scenario);
+    sessionRef.current = conversationId;
+    setMessages(restoredMessages);
+    setStage(payload.interfaceStage === "result" ? "result" : "practice");
+    setDraft("");
+    setError("");
+    setWaiting(false);
+    setStarting(false);
+    retryTurnRef.current = null;
   }, []);
+
+  useEffect(() => {
+    if (!selectedScenarioId) return;
+    const scenario = scenarios.find((item) => item.id === selectedScenarioId);
+    if (!scenario) { onSelectedScenarioChange(""); return; }
+    let current = true;
+    void (async () => {
+      const { data, error: loadError } = await supabase
+        .from("independent_training_sessions")
+        .select("conversation_id,payload,status")
+        .eq("scenario_id", scenario.id)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!current) return;
+      if (loadError) { setError("Não foi possível restaurar este treinamento."); return; }
+      if (data) applySession(scenario, String(data.conversation_id), data.payload as TrainingSessionPayload);
+      else {
+        setSelected(scenario);
+        sessionRef.current = "";
+        setMessages([]);
+        setStage("briefing");
+      }
+    })();
+    return () => { current = false; };
+  }, [applySession, onSelectedScenarioChange, scenarios, selectedScenarioId]);
 
   useEffect(() => {
     if (!selected) return;
@@ -66,16 +110,24 @@ export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
     return () => document.removeEventListener("keydown", onEscape);
   }, [close, selected]);
 
-  const start = () => {
+  const start = async () => {
     if (!selected || startLockRef.current) return;
     startLockRef.current = true;
     setStarting(true);
-    sessionRef.current = `training:${selected.id}:${crypto.randomUUID()}`;
-    setMessages([]);
-    setDraft("");
-    setError("");
-    setActive(true);
-    retryMessagesRef.current = [];
+    const conversationId = `training:${selected.id}:${crypto.randomUUID()}`;
+    try {
+      const { data, error: startError } = await supabase.rpc("start_independent_training_session", {
+        requested_conversation_id: conversationId,
+        requested_scenario_id: selected.id,
+        requested_payload: { lead: trainingLeadPayload(selected), scenarioTitle: selected.title, difficulty: selected.difficulty },
+      });
+      if (startError || !data) throw new Error(startError?.message || "O Supabase não confirmou o treinamento.");
+      applySession(selected, conversationId, data as TrainingSessionPayload);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não foi possível iniciar o treinamento.");
+      setStarting(false);
+      startLockRef.current = false;
+    }
   };
 
   const keepFocusInside = (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -96,23 +148,22 @@ export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
   const send = async () => {
     const text = draft.trim();
     if (!text || !selected || waiting) return;
-    const next = [...messages, { from: "seller" as const, text }];
+    const requestId = crypto.randomUUID();
+    const next = [...messages, { id: `pending:${requestId}`, from: "seller" as const, text, requestId }];
     setMessages(next);
     setDraft("");
-    retryMessagesRef.current = next;
-    await requestLeadReply(next);
+    retryTurnRef.current = { requestId, sellerText: text };
+    await requestLeadReply(requestId, text);
   };
 
   const retry = async () => {
-    if (!selected || waiting || retryMessagesRef.current.length === 0) return;
-    await requestLeadReply(retryMessagesRef.current);
+    if (!selected || waiting || !retryTurnRef.current) return;
+    await requestLeadReply(retryTurnRef.current.requestId, retryTurnRef.current.sellerText);
   };
 
-  const requestLeadReply = async (messageSnapshot: Message[]) => {
+  const requestLeadReply = async (requestId: string, sellerText: string) => {
     if (!selected) return;
-    const lead = selected.trainingLead;
     const requestSession = sessionRef.current || `training:${selected.id}`;
-    const requestId = crypto.randomUUID();
     setError("");
     setWaiting(true);
 
@@ -120,33 +171,24 @@ export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData.session?.access_token;
       if (!accessToken) throw new Error("Sua sessão expirou. Entre novamente para continuar.");
-      const response = await fetch("/api/training", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
-        body: JSON.stringify({
-          conversationId: requestSession,
-          requestId,
-          lead: {
-            name: lead?.name || "Contato do treinamento",
-            role: lead?.jobTitle || "Gestor da área",
-            company: lead?.company,
-            segment: lead?.segment || "Serviços",
-            companySize: lead?.companySize || "Média empresa",
-            problem: lead?.knownNeed || selected.objective,
-            solution: lead?.service || "Projeto de TI",
-            communicationStyle: lead?.style,
-            visibleObjection: lead?.visibleObjection,
-            hiddenConcern: lead?.hiddenConcern,
-            decisionBarrier: lead?.decisionBarrier,
-            difficulty: selected.difficulty,
-          },
-          messages: messageSnapshot,
-        }),
-      });
-      const result = await response.json() as SimulationResult;
+      let response: Response | undefined;
+      let result: SimulationResult = {};
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        response = await fetch("/api/training", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({ conversationId: requestSession, requestId, sellerText }),
+        });
+        result = await response.json() as SimulationResult;
+        if (response.status !== 202 || result.status !== "processing") break;
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+      }
+      if (!response) throw new Error("Não foi possível consultar o treinamento.");
       if (!response.ok || !result.text) throw new Error(result.error || "Não foi possível gerar a resposta.");
       if (sessionRef.current !== requestSession || (result.conversationId && result.conversationId !== requestSession)) return;
-      setMessages((current) => [...current, { from: "lead", text: result.text! }]);
+      if (result.session) applySession(selected, requestSession, result.session);
+      else setMessages((current) => current.some((message) => message.from === "lead" && message.requestId === requestId) ? current : [...current, { from: "lead", text: result.text!, requestId }]);
+      retryTurnRef.current = null;
     } catch (cause) {
       if (sessionRef.current === requestSession) setError(cause instanceof Error ? cause.message : "Falha técnica ao gerar a resposta.");
     } finally {
@@ -162,7 +204,7 @@ export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
       <div className="local-title"><div><p className="eyebrow">5 LEADS EXCLUSIVOS</p><h1>Treinamentos</h1><p>Personas independentes, sem vínculo com os 300 leads.</p></div></div>
       <div className="training-grid">
         {scenarios.map((scenario) => (
-          <button key={scenario.id} onClick={(event) => { openerRef.current = event.currentTarget; setSelected(scenario); }}>
+          <button key={scenario.id} onClick={(event) => { openerRef.current = event.currentTarget; onSelectedScenarioChange(scenario.id); }}>
             <span>{scenario.difficulty}</span>
             <h2>{scenario.title}</h2>
             <p>{scenario.trainingLead?.name} · {scenario.trainingLead?.company}</p>
@@ -181,7 +223,7 @@ export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
               </div>
               <button ref={closeButtonRef} className="training-close" type="button" onClick={close} aria-label="Fechar treinamento">×</button>
             </header>
-            {!active ? (
+            {stage === "briefing" ? (
               <main className="training-briefing" id={descriptionId}>
                 <section className="training-persona training-card training-card-enter" aria-labelledby={`${titleId}-persona`}>
                   <div className="training-avatar" aria-hidden="true">{initials(lead?.name)}</div>
@@ -210,7 +252,8 @@ export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
                 </section>
 
                 <div className="training-notice training-card-enter"><span className="training-notice-icon"><TrainingIcon name="info" /></span><div><b>Ambiente de treinamento independente</b><span>Esta persona existe somente neste treinamento e não aparece nos 300 leads.</span></div></div>
-                <button className="primary training-start" type="button" disabled={starting} aria-busy={starting} onClick={start}><span>{starting ? "Preparando treinamento…" : "Iniciar treinamento"}</span><TrainingIcon name="arrow" /></button>
+                {error && <div className="recoverable-error" role="alert"><span>{error}</span></div>}
+                <button className="primary training-start" type="button" disabled={starting} aria-busy={starting} onClick={() => void start()}><span>{starting ? "Preparando treinamento…" : "Iniciar treinamento"}</span><TrainingIcon name="arrow" /></button>
               </main>
             ) : (
               <main className="training-practice" id={descriptionId}>
@@ -219,7 +262,8 @@ export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
                   {messages.map((message, index) => <div key={index} className={`local-message ${message.from === "seller" ? "seller" : "contact"}`}><small>{message.from === "seller" ? "Você" : lead?.name || "Contato"}</small><p>{message.text}</p></div>)}
                   {waiting && <span>{lead?.name} está respondendo...</span>}
                 </div>
-                <div className="local-chat-compose"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Escreva sua mensagem..." aria-label="Mensagem para o cliente" /><button className="primary" disabled={!draft.trim() || waiting} onClick={send}>Enviar ↑</button></div>
+                {stage === "result" && <div className="simulation-ended"><span><b>Treinamento encerrado</b> Esta conversa permanece salva no seu histórico de treinamento.</span></div>}
+                {stage === "practice" && <div className="local-chat-compose"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Escreva sua mensagem..." aria-label="Mensagem para o cliente" /><button className="primary" disabled={!draft.trim() || waiting} onClick={send}>Enviar ↑</button></div>}
                 {error && <div className="recoverable-error" role="alert"><span>{error}</span><button disabled={waiting} onClick={retry}>Tentar novamente</button></div>}
               </main>
             )}
@@ -228,4 +272,22 @@ export function LocalTrainings({ scenarios }: { scenarios: LocalScenario[] }) {
       )}
     </>
   );
+}
+
+function trainingLeadPayload(scenario: LocalScenario) {
+  const lead = scenario.trainingLead;
+  return {
+    name: lead?.name || "Contato do treinamento",
+    role: lead?.jobTitle || "Gestor da área",
+    company: lead?.company,
+    segment: lead?.segment || "Serviços",
+    companySize: lead?.companySize || "Média empresa",
+    problem: lead?.knownNeed || scenario.objective,
+    solution: lead?.service || "Projeto de TI",
+    communicationStyle: lead?.style,
+    visibleObjection: lead?.visibleObjection,
+    hiddenConcern: lead?.hiddenConcern,
+    decisionBarrier: lead?.decisionBarrier,
+    difficulty: scenario.difficulty,
+  };
 }

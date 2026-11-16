@@ -119,6 +119,19 @@ test("does not treat the related service as a presented proposal until the selle
   assert.equal(afterPitch.objectionIsPertinent, true);
 });
 
+test("derives adaptive negotiation state locally without another Gemini call", () => {
+  const state = deriveCommercialState(bruno, [
+    { from: "seller", text: "Como esse processo afeta a equipe hoje?" },
+    { from: "lead", text: "Usamos planilhas, mas tenho receio do tempo de implantação." },
+    { from: "seller", text: "Entendo esse receio. Podemos conduzir um piloto de duas semanas com métricas de adoção." },
+  ]);
+  assert.equal(state.consultativeQuestionCount, 1);
+  assert.equal(state.specificArgumentCount, 1);
+  assert.equal(state.trustLevel, "developing");
+  assert.equal(state.pendingObjection, false);
+  assert.equal(state.pressureAttemptCount, 0);
+});
+
 test("keeps different leads differentiated through persistent identity and role context", () => {
   const opening = [{ from: "seller", text: "Olá, tudo bem?" }];
   const leads = [
@@ -278,10 +291,11 @@ test("separates simulation and final evaluation Gemini workloads", async () => {
 });
 
 test("keeps independent training authenticated and isolated from persisted lead conversations", async () => {
-  const [component, route, migration] = await Promise.all([
+  const [component, route, usageMigration, sessionMigration] = await Promise.all([
     readFile(new URL("../components/LocalTrainings.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/training/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/202611150002_independent_training_usage.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/202611150005_persist_independent_training_sessions.sql", import.meta.url), "utf8"),
   ]);
   assert.match(component, /fetch\("\/api\/training"/);
   assert.match(component, /authorization: `Bearer \$\{accessToken\}`/);
@@ -292,16 +306,28 @@ test("keeps independent training authenticated and isolated from persisted lead 
   assert.match(route, /record_independent_training_usage/);
   assert.match(route, /requestsInFlight/);
   assert.doesNotMatch(route, /user_simulations/);
-  assert.match(migration, /operation_kind[^\n]*'simulation'/);
-  assert.match(migration, /grant execute[^\n]*to service_role/);
+  assert.match(route, /claim_independent_training_turn/);
+  assert.match(route, /complete_independent_training_turn/);
+  assert.doesNotMatch(route, /body\.messages/);
+  assert.match(component, /independent_training_sessions/);
+  assert.match(component, /start_independent_training_session/);
+  assert.match(component, /sellerText/);
+  assert.match(usageMigration, /operation_kind[^\n]*'simulation'/);
+  assert.match(usageMigration, /grant execute[^\n]*to service_role/);
+  assert.match(sessionMigration, /primary key \(seller_id, conversation_id\)/);
+  assert.match(sessionMigration, /request_id/);
+  assert.match(sessionMigration, /jsonb_set\(v_payload, '\{messages\}'/);
 });
 
-test("classifies evaluation provider failures without retrying or masking credential errors", async () => {
+test("retries only temporary evaluation failures and does not mask credential errors", async () => {
   const evaluationRoute = await readFile(new URL("../app/api/evaluate/route.ts", import.meta.url), "utf8");
   assert.match(evaluationRoute, /"gemini-3\.5-flash-lite"/);
   assert.match(evaluationRoute, /classifyEvaluationProviderFailure/);
   assert.doesNotMatch(evaluationRoute, /await new Promise\(\(resolve\) => setTimeout/);
   assert.equal((evaluationRoute.match(/await callGemini\(/g) || []).length, 1);
+  assert.match(evaluationRoute, /attemptNumber < 3/);
+  assert.match(evaluationRoute, /\[500, 502, 503, 504\]\.includes/);
+  assert.match(evaluationRoute, /persist_gemini_evaluation/);
 });
 
 test("exposes tenant-scoped Gemini monitoring by user and simulation", async () => {
@@ -340,7 +366,7 @@ test("restores the selected conversation id in the URL and orders persisted mess
     readFile(new URL("../lib/local-domain.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(workspace, /URLSearchParams\(window\.location\.search\)\.get\("conversation"\)/);
+  assert.match(workspace, /searchParams\.get\("conversation"\)/);
   assert.match(workspace, /replaceState\(null, "", path\)/);
   assert.match(domain, /new Date\(a\.createdAt\)\.getTime\(\)-new Date\(b\.createdAt\)\.getTime\(\)/);
 });

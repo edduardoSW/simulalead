@@ -21,6 +21,7 @@ export function classifyEvaluationProviderFailure(attempt: EvaluationProviderFai
   if (attempt.status === 404) return { status: 503, body: { error: `O modelo de avaliação ${model} não foi encontrado ou não está disponível para esta chave (404).` } };
   if (attempt.status === 429) return { status: 429, body: { error: dailyQuota ? "A cota diária de avaliações do Gemini foi esgotada (429)." : "O limite temporário de avaliações do Gemini foi atingido (429).", retryAfterSeconds: attempt.retryAfterSeconds } };
   if (attempt.status === 500) return { status: 503, body: { error: "O Gemini encontrou um erro interno ao gerar a avaliação (500). Tente novamente mais tarde." } };
+  if (attempt.status === 503) return { status: 503, body: { error: "O Gemini está temporariamente indisponível para gerar a avaliação (503). A conversa foi preservada; tente novamente." } };
   if (attempt.status === 504) return { status: 504, body: { error: "O Gemini excedeu o tempo limite ao gerar a avaliação (504)." } };
   if (attempt.status === 502) return { status: 502, body: { error: "Não foi possível conectar ao Gemini para gerar a avaliação (502)." } };
   if (attempt.status >= 500) return { status: 503, body: { error: `O serviço de avaliação do Gemini está temporariamente indisponível (${attempt.status}).` } };

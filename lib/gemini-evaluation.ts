@@ -22,10 +22,12 @@ export const evaluationResponseSchema = {
     summary: { type: "string" },
     strengths: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 },
     improvements: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 },
+    objectionAnalysis: { type: "string" },
+    evidenceExamples: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 4 },
     recommendations: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 },
     nextStep: { type: "string" },
   },
-  required: ["criteria", "overallScore", "summary", "strengths", "improvements", "recommendations", "nextStep"],
+  required: ["criteria", "overallScore", "summary", "strengths", "improvements", "objectionAnalysis", "evidenceExamples", "recommendations", "nextStep"],
 } as const;
 
 export function buildEvaluationPrompt(conversation: LocalConversation, account?: LocalAccount, product?: LocalProduct) {
@@ -47,7 +49,7 @@ export function buildEvaluationPrompt(conversation: LocalConversation, account?:
   }
   return `Avalie esta simulacao de venda B2B em portugues do Brasil.
 Contexto: empresa ${account?.name || "nao informada"}; segmento ${account?.segment || "nao informado"}; solucao relacionada ${product?.name || "nao informada"}.
-Regras: avalie apenas comportamentos observaveis do vendedor; nao penalize ausencia de objecao, decisor, fechamento ou informacao que o cliente nao ofereceu; diferencie falha do vendedor de situacao fora do controle dele; use notas inteiras de 0 a 10 por criterio; seja direto, pratico e respeitoso; nao invente falas.
+Regras: avalie apenas comportamentos observaveis do vendedor; nao penalize ausencia de objecao, decisor, fechamento ou informacao que o cliente nao ofereceu; diferencie falha do vendedor de situacao fora do controle dele; use notas inteiras de 0 a 10 por criterio; overallScore deve ser a media aritmetica dos sete criterios; seja direto, pratico e respeitoso; nao invente falas. Em objectionAnalysis, explique como as objecoes existentes foram tratadas ou registre que nao houve objecao observavel. Em evidenceExamples, cite trechos curtos e literais da conversa, identificando VENDEDOR ou CLIENTE, e explique brevemente o que cada trecho evidencia.
 Conversa:
 ${transcript || "Sem mensagens comerciais."}`;
 }
@@ -58,6 +60,8 @@ type RawEvaluation = {
   summary?: unknown;
   strengths?: unknown;
   improvements?: unknown;
+  objectionAnalysis?: unknown;
+  evidenceExamples?: unknown;
   recommendations?: unknown;
   nextStep?: unknown;
 };
@@ -82,16 +86,19 @@ export function parseEvaluationResponse(raw: string, conversationId: string, mod
     const value = parsed.criteria?.[key];
     if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Invalid evaluation criterion: ${key}`);
     return [key, score(value)];
-  })) as LocalEvaluation["criteria"];
+  })) as NonNullable<LocalEvaluation["criteria"]>;
   if (typeof parsed.overallScore !== "number" || !Number.isFinite(parsed.overallScore)) throw new Error("Invalid evaluation score");
+  const calculatedOverall = Object.values(criteria).reduce((total, value) => total + value, 0) / Object.keys(criteria).length;
   return {
     id: crypto.randomUUID(),
     conversationId,
-    score: Math.round(Math.max(0, Math.min(10, parsed.overallScore)) * 10),
+    score: Math.round(calculatedOverall * 10),
     summary: requiredText(parsed.summary, "summary"),
     criteria,
     strengths: requiredList(parsed.strengths, "strengths"),
     improvements: requiredList(parsed.improvements, "improvements"),
+    objectionAnalysis: requiredText(parsed.objectionAnalysis, "objectionAnalysis"),
+    evidenceExamples: requiredList(parsed.evidenceExamples, "evidenceExamples"),
     recommendations: requiredList(parsed.recommendations, "recommendations"),
     nextStep: requiredText(parsed.nextStep, "nextStep"),
     model,

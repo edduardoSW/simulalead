@@ -8,6 +8,7 @@ type GenerationState = Record<string, ActiveGeneration>;
 type Props = {
   data: LocalData;
   selectedConversationId: string;
+  scrollStorageKeyPrefix: string;
   activeGenerations: GenerationState;
   generationErrors: GenerationErrors;
   evaluatingConversationId: string;
@@ -20,7 +21,7 @@ type Props = {
   onStartAnother: () => void;
 };
 
-export function LocalConversations({ data, selectedConversationId, activeGenerations, generationErrors, evaluatingConversationId, onSelect, onRead, onSend, onConfirmBatch, onFinalize, onEvaluate, onStartAnother }: Props) {
+export function LocalConversations({ data, selectedConversationId, scrollStorageKeyPrefix, activeGenerations, generationErrors, evaluatingConversationId, onSelect, onRead, onSend, onConfirmBatch, onFinalize, onEvaluate, onStartAnother }: Props) {
   const valid = data.conversations.filter((conversation) =>
     data.accounts.some((account) => account.id === conversation.accountId) &&
     data.opportunities.some((opportunity) => opportunity.id === conversation.opportunityId || opportunity.accountId === conversation.accountId),
@@ -31,6 +32,9 @@ export function LocalConversations({ data, selectedConversationId, activeGenerat
   const [locallyConfirmed, setLocallyConfirmed] = useState<Record<string, boolean>>({});
   const confirmLocks = useRef(new Set<string>());
   const input = useRef<HTMLTextAreaElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const restoringScrollRef = useRef(false);
   const conversation = valid.find((item) => item.id === selected) || valid[0];
   const conversationId = conversation?.id;
   const activeGeneration = conversation ? activeGenerations[conversation.id] : undefined;
@@ -41,10 +45,25 @@ export function LocalConversations({ data, selectedConversationId, activeGenerat
   }, [conversationId, onRead]);
 
   useEffect(() => {
-    const history = document.querySelector<HTMLElement>(".local-chat-history");
-    if (!history) return;
+    const history = historyRef.current;
+    if (!history || !conversationId) return;
+    restoringScrollRef.current = true;
+    const frame = window.requestAnimationFrame(() => {
+      const rawStored = window.localStorage.getItem(`${scrollStorageKeyPrefix}${conversationId}`);
+      const stored = Number(rawStored);
+      const hasStoredPosition = rawStored !== null && Number.isFinite(stored) && stored >= 0;
+      history.scrollTop = hasStoredPosition ? Math.min(stored, history.scrollHeight) : history.scrollHeight;
+      stickToBottomRef.current = history.scrollHeight - history.scrollTop - history.clientHeight < 80;
+      restoringScrollRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [conversationId, scrollStorageKeyPrefix]);
+
+  useEffect(() => {
+    const history = historyRef.current;
+    if (!history || restoringScrollRef.current || !stickToBottomRef.current) return;
     history.scrollTo({ top: history.scrollHeight, behavior: "smooth" });
-  }, [selected, conversation?.messages.length, respondingHere]);
+  }, [conversation?.messages.length, respondingHere]);
 
   if (!conversation) return <Empty />;
 
@@ -122,7 +141,12 @@ export function LocalConversations({ data, selectedConversationId, activeGenerat
       </aside>
       <section>
         <header><div><b>{contact.name}</b><span>{account.name} · {contact.jobTitle}</span><strong>Servico relacionado: {product?.name || "Nao informado"}</strong></div></header>
-        <div className="local-chat-history">
+        <div ref={historyRef} className="local-chat-history" onScroll={(event) => {
+          if (!conversationId || restoringScrollRef.current) return;
+          const history = event.currentTarget;
+          stickToBottomRef.current = history.scrollHeight - history.scrollTop - history.clientHeight < 80;
+          try { window.localStorage.setItem(`${scrollStorageKeyPrefix}${conversationId}`, String(Math.max(0, Math.round(history.scrollTop)))); } catch { /* Scroll restoration remains optional. */ }
+        }}>
           {!conversation.messages.length && <div className="local-chat-empty"><h2>Voce inicia esta conversa</h2><p>Explique claramente o motivo do contato.</p></div>}
           {conversation.messages.map((message) => (
             <div className={`local-message ${message.sender}`} key={message.id}>

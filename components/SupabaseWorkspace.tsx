@@ -7,7 +7,7 @@ import { SupabaseRepository } from "../lib/supabase-repository";
 import { hasSupabaseConfig,supabase } from "../lib/supabase-client";
 import { PasswordInput } from "./PasswordInput";
 import { LoadingScreen,StartupErrorScreen } from "./AppFallbacks";
-import type { WorkspaceSection } from "../lib/workspace-routes";
+import { clearLastWorkspaceLocation, type WorkspaceSection } from "../lib/workspace-routes";
 
 type Profile={id:string;organization_id:string;full_name:string;role:"admin"|"manager"|"seller"};
 type Organization={id:string;name:string;created_at:string};
@@ -24,7 +24,11 @@ export function SupabaseWorkspace({initialSection="home"}:{initialSection?:Works
   if(profileLoading)return <LoadingScreen text="Carregando workspace"/>;
   if(!profile)return <OrganizationSetup userName={session.user.user_metadata?.full_name||session.user.email?.split("@")[0]||"Administrador"} onCreated={()=>loadProfile(session.user.id,setProfile,setOrganization,setError)} error={error}/>;
   if(!repository)return <StartupErrorScreen message="O workspace não pôde ser montado porque os dados da organização estão incompletos." onAction={()=>window.location.reload()}/>;
-  return <LocalWorkspace repository={repository} profile={profile} initialSection={initialSection} onLogout={()=>supabase.auth.signOut()}/>;
+  return <LocalWorkspace repository={repository} profile={profile} initialSection={initialSection} onLogout={()=>{
+    clearLastWorkspaceLocation(window.localStorage, profile.id);
+    window.history.replaceState(null,"","/entrar");
+    void supabase.auth.signOut();
+  }}/>;
 }
 
 async function loadProfile(userId:string,setProfile:(value:Profile|null)=>void,setOrganization:(value:Organization|null)=>void,setError:(value:string)=>void){setError("");console.info("[simulaLEAD] Carregando perfil.",{userId});const {data,error}=await supabase.from("profiles").select("id,organization_id,full_name,role,organizations(id,name,created_at)").eq("id",userId).maybeSingle();if(error){console.error("[simulaLEAD] Falha ao carregar perfil.",error);setProfile(null);setOrganization(null);setError(error.message);return}if(!data){console.warn("[simulaLEAD] Perfil não encontrado para a sessão atual.",{userId});setProfile(null);setOrganization(null);return}const related=data.organizations as Organization|Organization[]|null,org=Array.isArray(related)?related[0]:related;if(!org){console.error("[simulaLEAD] Perfil sem organização vinculada.",{userId,organizationId:data.organization_id});setProfile(null);setOrganization(null);setError("Não foi possível carregar a organização.");return}setProfile({id:data.id,organization_id:data.organization_id,full_name:data.full_name,role:data.role} as Profile);setOrganization(org);console.info("[simulaLEAD] Workspace pronto.",{organizationId:org.id,role:data.role})}

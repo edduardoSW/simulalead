@@ -46,23 +46,27 @@ const prompt = buildEvaluationPrompt(
 );
 
 const startedAt = Date.now();
-const attempt = await generateGeminiContent({
-  apiKey,
-  model,
-  timeoutMs: 35_000,
-  body: {
-    systemInstruction: { parts: [{ text: "Voce e um avaliador de treinamento comercial B2B. Responda somente com o JSON solicitado, sem markdown." }] },
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      maxOutputTokens: 900,
-      responseMimeType: "application/json",
-      responseSchema: evaluationResponseSchema,
-      thinkingConfig: { thinkingLevel: "minimal" },
+let attempt;
+for (let attemptNumber = 0; attemptNumber < 3; attemptNumber += 1) {
+  attempt = await generateGeminiContent({
+    apiKey,
+    model,
+    timeoutMs: 16_000,
+    body: {
+      systemInstruction: { parts: [{ text: "Voce e um avaliador de treinamento comercial B2B. Responda somente com o JSON solicitado, sem markdown." }] },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        maxOutputTokens: 900,
+        responseMimeType: "application/json",
+        responseSchema: evaluationResponseSchema,
+        thinkingConfig: { thinkingLevel: "minimal" },
+      },
     },
-  },
-});
+  });
+  if (attempt.ok || ![500, 502, 503, 504].includes(attempt.status)) break;
+}
 
-if (!attempt.ok) {
+if (!attempt?.ok) {
   throw new Error(`Gemini respondeu HTTP ${attempt.status}: ${attempt.data?.error?.status || "erro sem codigo"}`);
 }
 
@@ -77,6 +81,8 @@ console.log(JSON.stringify({
   strengths: evaluation.strengths.length,
   improvements: evaluation.improvements.length,
   recommendations: evaluation.recommendations.length,
+  hasObjectionAnalysis: evaluation.objectionAnalysis.length > 0,
+  evidenceExamples: evaluation.evidenceExamples.length,
   hasSummary: evaluation.summary.length > 0,
   hasNextStep: evaluation.nextStep.length > 0,
   promptTokens: attempt.data?.usageMetadata?.promptTokenCount || 0,

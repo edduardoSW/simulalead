@@ -83,6 +83,24 @@ test("moves seller evaluations out of the organization-wide workspace payload", 
   assert.match(route, /simulationPayload\.evaluation/);
 });
 
+test("persists final evaluations atomically in the seller-owned simulation", async () => {
+  const [migration, route, workspace] = await Promise.all([
+    readFile(new URL("supabase/migrations/202611160001_persist_gemini_evaluations.sql", root), "utf8"),
+    readFile(new URL("app/api/evaluate/route.ts", root), "utf8"),
+    readFile(new URL("components/LocalWorkspace.tsx", root), "utf8"),
+  ]);
+  assert.match(migration, /create or replace function public\.persist_gemini_evaluation/);
+  assert.match(migration, /for update/);
+  assert.match(migration, /existing_evaluation/);
+  assert.match(migration, /jsonb_set\(simulation\.payload, '\{evaluation\}'/);
+  assert.match(migration, /profile\.id = requested_seller_id/);
+  assert.match(migration, /revoke all[\s\S]*authenticated/);
+  assert.match(migration, /grant execute[\s\S]*to service_role/);
+  assert.match(route, /createAdminSupabase\(\)\.rpc\("persist_gemini_evaluation"/);
+  assert.match(workspace, /const next = await service\.load\(\)/);
+  assert.doesNotMatch(workspace, /service\.saveEvaluation\(result\.evaluation\)/);
+});
+
 test("creates team members only through an authenticated server route with rollback", async () => {
   const [route, serverClient, component] = await Promise.all([
     readFile(new URL("app/api/team-members/route.ts", root), "utf8"),

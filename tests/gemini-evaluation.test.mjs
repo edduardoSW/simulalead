@@ -42,13 +42,17 @@ test("parses all seven criteria and clamps invalid scores", () => {
     summary: "Boa descoberta com espaço para um fechamento mais específico.",
     strengths: ["Perguntas objetivas"],
     improvements: ["Confirmar impacto"],
+    objectionAnalysis: "O cliente não apresentou uma objeção explícita.",
+    evidenceExamples: ["VENDEDOR: \"Quantos pedidos chegam por semana?\" — quantifica o cenário."],
     recommendations: ["Combine data e responsável do próximo passo"],
     nextStep: "Treinar fechamento.",
   }), conversation.id, "gemini-2.5-flash");
 
   assert.equal(Object.keys(evaluation.criteria).length, 7);
   assert.equal(evaluation.criteria.communicationClarity, 10);
-  assert.equal(evaluation.score, 84);
+  assert.equal(evaluation.score, 70);
+  assert.match(evaluation.objectionAnalysis, /não apresentou/);
+  assert.equal(evaluation.evidenceExamples.length, 1);
   assert.equal(evaluation.model, "gemini-2.5-flash");
   assert.equal(evaluation.conversationId, conversation.id);
 });
@@ -56,6 +60,8 @@ test("parses all seven criteria and clamps invalid scores", () => {
 test("requires structured fields for every evaluation criterion", () => {
   assert.deepEqual(evaluationResponseSchema.properties.criteria.required, Object.keys(evaluationCriteriaLabels));
   assert.match(JSON.stringify(evaluationResponseSchema), /overallScore/);
+  assert.match(JSON.stringify(evaluationResponseSchema), /objectionAnalysis/);
+  assert.match(JSON.stringify(evaluationResponseSchema), /evidenceExamples/);
 });
 
 test("keeps the complete conversation when it fits the evaluation context", () => {
